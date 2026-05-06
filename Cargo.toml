@@ -1,0 +1,36 @@
+[package]
+name = "orion"
+version = "0.1.0"
+edition = "2021"
+description = "Free Software cross-platform virtual audio mixer"
+license = "GPL-3.0"
+
+[[bin]]
+name = "orion"
+path = "src/main.rs"
+
+[dependencies]
+gpui              = { git = "https://github.com/zed-industries/zed", package = "gpui" }
+gpui_platform     = { git = "https://github.com/zed-industries/zed", package = "gpui_platform", features = ["wayland", "x11"] }
+cpal              = "0.15"
+crossbeam-channel = "0.5"
+rtrb              = "0.3"
+arc-swap          = "1"
+log               = "0.4"
+env_logger        = "0.11"
+thiserror         = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+pipewire = { version = "0.8", optional = true }
+
+[features]
+default = []
+virtual-devices = ["pipewire"]
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

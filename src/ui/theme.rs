@@ -1,0 +1,12 @@
+pub const BASE: u32 = 0x0D0D1A;
+pub const SURFACE: u32 = 0x141428;
+pub const SURFACE_2: u32 = 0x1E1E38;
+pub const ACCENT: u32 = 0xFF6B2B;
+pub const ACCENT_DIM: u32 = 0xCC5522;
+pub const TEXT: u32 = 0xE8E8F0;
+pub const TEXT_MUTED: u32 = 0x9090A8;
+pub const TEXT_FAINT: u32 = 0x505068;
+pub const ROUTE_ON: u32 = 0xFF6B2B;
+pub const ROUTE_OFF: u32 = 0x1E1E38;
+pub const ROUTE_ON_HOVER: u32 = 0xCC5522;
+pub const ROUTE_OFF_HOVER: u32 = 0x2A2A48;
