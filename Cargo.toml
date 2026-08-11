@@ -31,7 +31,11 @@ orion-dsp         = { path = "crates/orion-dsp" }
 serde             = { version = "1", features = ["derive"] }
 serde_json        = "1"
 uuid              = { version = "1", features = ["serde", "v4", "v5"] }
-notify = { version = "8.2.0", default-features = false }
+# default-features off keeps the dependency lean; on macOS the kqueue backend
+# is selected explicitly because the default FSEvents module does not compile
+# without its (default) `macos_fsevent` feature. Orion watches a single
+# settings directory non-recursively, so kqueue is more than sufficient.
+notify = { version = "8.2.0", default-features = false, features = ["macos_kqueue"] }
 schemars = { version = "1", features = ["uuid1"] }
 directories = "6"
 
@@ -43,13 +47,18 @@ pipewire = { version = "0.10", features = ["v0_3_41"] }
 # streams on its own high-priority threads; the platform-neutral engine in
 # src/realtime does all processing. Linux stays on the native PipeWire
 # backend, which is strictly richer (virtual devices, app streams, graph).
+# cpal is pinned to 0.17: 0.18 declares `windows`/`windows-core` ranges
+# spanning two semver families (>=0.61, <=0.62), and cargo resolves them into
+# different families next to gpui_windows/accesskit (windows-core 0.62),
+# breaking cpal's own WASAPI build. The `realtime` feature (thread priority)
+# is not used by the backend. Revisit on a cpal release with narrowed ranges.
 [target.'cfg(windows)'.dependencies]
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "ae394f3d474f4996d2cdef6ee97551fdb6748acd", package = "gpui_platform" }
-cpal = { version = "0.18", features = ["realtime"] }
+cpal = "0.17"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "ae394f3d474f4996d2cdef6ee97551fdb6748acd", package = "gpui_platform" }
-cpal = "0.18"
+cpal = "0.17"
 
 [profile.dev]
 opt-level = 1

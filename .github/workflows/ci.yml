@@ -72,31 +72,10 @@ jobs:
       # Unit tests only. The live PipeWire integration tests in
       # tests/pipewire_backend.rs are #[ignore]d and run manually with
       # `cargo test -- --ignored` on a machine with a PipeWire session.
+      # On Windows/macOS this job is also the portability gate: the cpal
+      # backend and all platform-gated code must keep compiling there.
       - name: test
         run: cargo test --workspace --locked
-
-  # Portability gate for the Windows/macOS ports: the cpal backend and all
-  # platform-gated code must keep compiling on every target OS. No audio
-  # runs here — this is compilation and lint coverage only.
-  portability:
-    name: portability (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
-      - name: clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - name: check
-        run: cargo check --workspace --all-targets --locked
 
   packaging-metadata:
     name: Validate packaging metadata
