@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.3](https://github.com/gardun0/orion/compare/v0.1.2...v0.1.3) (2026-08-11)
+
+
+### Features
+
+* bus clip protection, mode crossfade, RMS/clip meters, cpal backend ([b51e345](https://github.com/gardun0/orion/commit/b51e345d0b1b5fed8fc1c281909587b952d03e06))
+
+
+### Bug Fixes
+
+* build release packages on ubuntu-24.04 and allow manual re-packaging ([8b31dd6](https://github.com/gardun0/orion/commit/8b31dd668153139fb3ec23ff7fc57e383aa1fce5))
+* build release packages on ubuntu-24.04 and allow manual re-packaging ([ee72958](https://github.com/gardun0/orion/commit/ee7295889c1705be431736bcbb11dc741bd30053))
+* mark pre-1.0 releases as prerelease on manual dispatch runs too ([cc155e6](https://github.com/gardun0/orion/commit/cc155e61131832e2a870e0f6cd144c423f1cbdf3))
+* repair Windows and macOS CI builds ([b9f2e1f](https://github.com/gardun0/orion/commit/b9f2e1fe21f805e55adfe6f7d47a8b3809581b3e))
+
 ## [0.1.2](https://github.com/gardun0/orion/compare/v0.1.1...v0.1.2) (2026-08-11)
 
 
