@@ -42,14 +42,24 @@ jobs:
         run: echo "version=$(jq -r 'to_entries[0].value' .release-please-manifest.json)" >> "$GITHUB_OUTPUT"
 
   package:
-    name: Build & package
+    name: Build & package (${{ matrix.os }})
     needs: release-please
     if: >-
       (github.event_name == 'push' && needs.release-please.outputs.releases_created == 'true')
       || (github.event_name == 'workflow_dispatch' && inputs.version != '')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            artifact: dist-linux
+          - os: windows-latest
+            artifact: dist-windows
+          - os: macos-latest
+            artifact: dist-macos
     # ubuntu-24.04: the pipewire crate needs PipeWire 1.x headers (22.04 ships
     # 0.3.48, which fails to build). Binary floor: glibc 2.39, PipeWire 1.0.
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
     env:
       VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || needs.release-please.outputs.version }}
     steps:
@@ -58,6 +68,7 @@ jobs:
           ref: v${{ github.event_name == 'workflow_dispatch' && inputs.version || needs.release-please.outputs.version }}
 
       - name: Install system dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -72,18 +83,22 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
-      # Compiled from source: the prebuilt binaries target GLIBC 2.39+, which
-      # is newer than this runner's glibc (ubuntu-22.04, chosen so the
-      # AppImage/tarball keep working on older distros).
+      # Compiled from source: the prebuilt binaries of these tools target a
+      # newer glibc than some of our build images ship.
       - name: Install packaging tools
+        if: runner.os == 'Linux'
         run: cargo install cargo-deb cargo-generate-rpm --locked
 
       - name: Build release binary
-        run: |
-          cargo build --release --locked
-          strip target/release/orion
+        run: cargo build --release --locked
 
+      - name: Strip binary
+        if: runner.os != 'Windows'
+        run: strip "target/release/orion" || true
+
+      # --- Linux packages -----------------------------------------------------
       - name: Assemble tarball
+        if: runner.os == 'Linux'
         run: |
           staging="target/release-staging"
           mkdir -p "$staging" dist
@@ -96,27 +111,39 @@ jobs:
           tar -czf "dist/orion-v${VERSION}-x86_64-unknown-linux-gnu.tar.gz" -C "$staging" .
 
       - name: Build Debian package
+        if: runner.os == 'Linux'
         run: |
           cargo deb --no-build
           cp target/debian/*.deb "dist/orion_${VERSION}_amd64.deb"
 
       - name: Build RPM package
+        if: runner.os == 'Linux'
         run: |
           cargo generate-rpm
           cp target/generate-rpm/*.rpm "dist/orion-${VERSION}-1.x86_64.rpm"
 
       - name: Build AppImage
+        if: runner.os == 'Linux'
         run: packaging/appimage/build-appimage.sh dist
 
-      - name: Checksums
+      # --- Windows package ----------------------------------------------------
+      - name: Build zip (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          cd dist
-          sha256sum * > SHA256SUMS.txt
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Force -Path target/release/orion.exe, LICENSE, README.md `
+            -DestinationPath "dist/orion-v${env:VERSION}-x86_64-pc-windows-msvc.zip"
+
+      # --- macOS package ------------------------------------------------------
+      - name: Build Orion.app zip (macOS)
+        if: runner.os == 'macOS'
+        run: packaging/macos/build-app.sh dist
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dist
+          name: ${{ matrix.artifact }}
           path: dist/
           retention-days: 7
 
@@ -131,10 +158,21 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: dist
+          pattern: dist-*
           path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
       - name: Upload assets to GitHub Release
         run: gh release upload "v${VERSION}" dist/* --clobber
+      # Keep the merged artifacts around for the AUR job.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
       - name: Mark pre-1.0 releases as prerelease
         if: startsWith(env.VERSION, '0.')
         run: gh release edit "v${VERSION}" --prerelease

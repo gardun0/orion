@@ -3,7 +3,7 @@
 
   # Orion
 
-  **Free software audio mixer and routing workspace for Linux, built in Rust with GPUI.**
+  **Free software audio mixer and routing workspace for Linux, Windows, and macOS, built in Rust with GPUI.**
 
   [![CI](https://github.com/gardun0/orion/actions/workflows/ci.yml/badge.svg)](https://github.com/gardun0/orion/actions/workflows/ci.yml)
   [![Release](https://img.shields.io/github/v/release/gardun0/orion?include_prereleases)](https://github.com/gardun0/orion/releases)
@@ -13,10 +13,12 @@
 
 ---
 
-Orion aims to be the audio control room of a Linux desktop: one workspace where
+Orion aims to be the audio control room of the desktop: one workspace where
 physical microphones and interfaces, application streams, desktop audio, and
-virtual devices are mixed, metered, and routed — with PipeWire as the audio
-backend and a native GPUI interface on Wayland and X11.
+virtual devices are mixed, metered, and routed. PipeWire powers Linux (with
+virtual devices and per-application routing); Windows (WASAPI) and macOS
+(CoreAudio) run through a cpal backend driving the same real-time engine — and
+the GPUI interface is native everywhere (Wayland and X11 on Linux).
 
 Orion started as a personal project — built for my own audio setup — and is now
 in active development. It is free software and will always be completely free
@@ -36,7 +38,7 @@ a click-free channel-mode switch; peak/RMS meters with clip indication, scenes
 (which track the mixer live while selected), and settings persist across
 restarts. Remaining work before `1.0` focuses on engine telemetry (latency and
 XRuns; CPU load is already in the footer), gaming EQ presets, and validating
-the macOS/Windows backends that now compile in CI — see the
+the macOS/Windows backends that now compile and package in CI — see the
 [feature tables](#features).
 
 ## Features
@@ -55,7 +57,7 @@ the macOS/Windows backends that now compile in CI — see the
 | ![](assets/docs/sound.png) | **Live meters** — elastic per-channel L/R meters (−90…0 dB with peak-hold marks and RMS markers) fed by the real-time engine, a per-strip clip LED, plus process CPU load in the footer |
 | ![](assets/docs/sound.png) | **Clipping protection** — an always-on soft-knee saturator (−1 dBFS knee) bounds every bus post-mix; clip detection runs pre-saturator, so driving a bus stays visible on the meter |
 | ![](assets/docs/scenes.png) | **Scenes & settings** — scenes track the mixer live while selected; everything persists to `settings.json` (schema v2) with atomic autosave, live reload on external edits, import/export, and a published JSON Schema ([`schema/settings.schema.json`](schema/settings.schema.json)) |
-| ![](assets/docs/configuration.png) | **Native desktop app** — GPUI interface with Wayland and X11 support, embedded fonts and icons, no runtime asset dependencies |
+| ![](assets/docs/configuration.png) | **Native desktop app** — GPUI interface on Linux (Wayland and X11), Windows, and macOS, with embedded fonts and icons and no runtime asset dependencies |
 
 ### In development
 
@@ -63,7 +65,7 @@ the macOS/Windows backends that now compile in CI — see the
 |---|---|
 | ![](assets/docs/sound.png) | **Engine telemetry** — latency and XRun stats (CPU load and live level meters already work) |
 | ![](assets/docs/eq.png) | **EQ presets for gaming** — named profiles tuned for titles like Warzone and CS2, built on the 3-band EQ that already works per endpoint |
-| ![](assets/docs/platforms.png) | **macOS & Windows support** — a cpal-based backend drives the same real-time engine on both OSes and is compile-gated in CI; runtime validation and packaging come next |
+| ![](assets/docs/platforms.png) | **macOS & Windows validation** — a cpal-based backend drives the same real-time engine on both OSes; CI compiles, tests, and packages all three platforms (zip on Windows, unsigned `.app` on macOS); runtime validation and signed installers come next |
 
 Have an idea that's not on the list?
 [Open an issue](https://github.com/gardun0/orion/issues) — feature requests and
@@ -133,6 +135,7 @@ assets/
 packaging/
   appimage/             AppImage build script (linuxdeploy)
   aur/                  PKGBUILD template for the orion-bin AUR package
+  macos/                unsigned Orion.app bundle script and Info.plist
 tests/                  live-PipeWire integration tests (ignored by default)
                         plus the engine's realtime-contract audit
 schema/                 canonical settings JSON Schema (published for external use)
@@ -149,15 +152,24 @@ Pre-built packages are attached to every
 - **AppImage** — `chmod +x orion-v<version>-x86_64.AppImage && ./orion-v<version>-x86_64.AppImage`
 - **Tarball** — extract and copy `orion` into your `PATH`; the desktop file,
   icons, and AppStream metadata are included under their conventional names
+- **Windows** — extract `orion-v<version>-x86_64-pc-windows-msvc.zip` and run
+  `orion.exe`
+- **macOS (Apple Silicon)** — extract `orion-v<version>-aarch64-apple-darwin.zip`;
+  the `.app` is unsigned, so on first launch use right-click → Open (Gatekeeper)
 
-All artifacts ship with `SHA256SUMS.txt` for verification.
+All artifacts ship with `SHA256SUMS.txt` for verification. The Windows and
+macOS builds are compiled and tested in CI but not yet runtime-validated —
+expect rough edges and please report them.
 
 ## Building
 
-Orion builds on Linux with stable Rust (see `rust-toolchain.toml`). The linker
-is configured as `clang` + `mold` (`.cargo/config.toml`).
+Orion builds with stable Rust (see `rust-toolchain.toml`) on Linux, Windows,
+and macOS. The Windows and macOS builds need no audio system dependencies —
+WASAPI and CoreAudio are reached through cpal — only the platform's standard
+toolchain (MSVC on Windows, Xcode Command Line Tools on macOS). On Linux the
+linker is configured as `clang` + `mold` (`.cargo/config.toml`).
 
-System dependencies:
+System dependencies (Linux):
 
 ```sh
 # Debian/Ubuntu
