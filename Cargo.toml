@@ -47,18 +47,20 @@ pipewire = { version = "0.10", features = ["v0_3_41"] }
 # streams on its own high-priority threads; the platform-neutral engine in
 # src/realtime does all processing. Linux stays on the native PipeWire
 # backend, which is strictly richer (virtual devices, app streams, graph).
-# cpal is pinned to 0.17: 0.18 declares `windows`/`windows-core` ranges
-# spanning two semver families (>=0.61, <=0.62), and cargo resolves them into
-# different families next to gpui_windows/accesskit (windows-core 0.62),
-# breaking cpal's own WASAPI build. The `realtime` feature (thread priority)
-# is not used by the backend. Revisit on a cpal release with narrowed ranges.
 [target.'cfg(windows)'.dependencies]
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "ae394f3d474f4996d2cdef6ee97551fdb6748acd", package = "gpui_platform" }
-cpal = "0.17"
+cpal = { version = "0.18", features = ["realtime"] }
+# Resolver pins (unused by Orion code): cpal 0.18 declares `windows` and
+# `windows-core` ranges spanning two semver families (>=0.61, <=0.62), and
+# cargo otherwise unifies them inconsistently next to gpui_windows
+# (windows 0.61) and accesskit_windows (windows-core 0.62), breaking cpal's
+# own WASAPI build. Forcing both to =0.62.2 keeps cpal consistent.
+windows = "=0.62.2"
+windows-core = "=0.62.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "ae394f3d474f4996d2cdef6ee97551fdb6748acd", package = "gpui_platform" }
-cpal = "0.17"
+cpal = "0.18"
 
 [profile.dev]
 opt-level = 1
