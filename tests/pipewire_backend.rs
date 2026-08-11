@@ -1535,9 +1535,7 @@ fn meters_survive_engine_restart_with_same_route() {
 }
 
 /// Wait for the default virtual input/output endpoints of a fresh engine.
-fn wait_for_default_virtuals(
-    handle: &orion::app_engine::EngineHandle,
-) -> (EndpointId, EndpointId) {
+fn wait_for_default_virtuals(handle: &orion::app_engine::EngineHandle) -> (EndpointId, EndpointId) {
     let deadline = Instant::now() + Duration::from_secs(6);
     let mut input = None;
     let mut output = None;
@@ -1556,5 +1554,8 @@ fn wait_for_default_virtuals(
             Err(error) => panic!("PipeWire backend event channel failed: {error}"),
         }
     }
-    (input.expect("virtual input"), output.expect("virtual output"))
+    (
+        input.expect("virtual input"),
+        output.expect("virtual output"),
+    )
 }

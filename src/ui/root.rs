@@ -220,15 +220,9 @@ impl RootView {
                                 .sources
                                 .iter()
                                 .position(|source| source.endpoint_id == Some(route.source))
-                                .and_then(|source_index| {
-                                    self.state
-                                        .outputs
-                                        .iter()
-                                        .position(|output| {
-                                            output.endpoint_id == Some(route.destination)
-                                        })
-                                        .map(|output_index| (source_index, output_index))
-                                });
+                                .zip(self.state.outputs.iter().position(|output| {
+                                    output.endpoint_id == Some(route.destination)
+                                }));
                             if let Some(cell) = cell {
                                 self.state.route_errors.remove(&cell);
                                 self.pending_route_commands

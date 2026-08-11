@@ -1223,12 +1223,11 @@ impl AppState {
                 .sources
                 .iter()
                 .position(|source| source.endpoint_id == Some(*source_id))
-                .and_then(|source_index| {
+                .zip(
                     self.outputs
                         .iter()
-                        .position(|output| output.endpoint_id == Some(*destination_id))
-                        .map(|output_index| (source_index, output_index))
-                });
+                        .position(|output| output.endpoint_id == Some(*destination_id)),
+                );
             if let Some((source_index, output_index)) = cell {
                 self.sources[source_index].routes[output_index] = true;
             }
