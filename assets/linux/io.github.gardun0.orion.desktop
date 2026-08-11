@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Orion
+GenericName=Audio Mixer
+Comment=Mix and route physical, application, and virtual audio
+Exec=orion
+Icon=io.github.gardun0.orion
+Terminal=false
+Categories=AudioVideo;Audio;Mixer;
+Keywords=audio;mixer;routing;pipewire;virtual;
+StartupWMClass=io.github.gardun0.orion

@@ -1,0 +1,61 @@
+# cargo-deny configuration.
+# Docs: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+all-features = false
+no-default-features = false
+
+[advisories]
+version = 2
+yanked = "deny"
+# Pinned transitively by the GPUI/Zed tree (Cargo.toml rev); Orion cannot
+# upgrade these without a GPUI rev bump. Review on every GPUI update.
+ignore = [
+  # wayland-scanner 0.31 (build-time, trusted protocol XML) pins quick-xml 0.39.
+  "RUSTSEC-2026-0194",
+  "RUSTSEC-2026-0195",
+  # Unmaintained crates pulled in by zed-industries crates (paste via gpui
+  # macOS/media crates, proc-macro-error2, rustybuzz/ttf-parser via text/svg).
+  "RUSTSEC-2024-0436",
+  "RUSTSEC-2026-0173",
+  "RUSTSEC-2026-0206",
+  "RUSTSEC-2026-0192",
+]
+
+[bans]
+multiple-versions = "warn"
+# GPUI and orion-dsp are git/path dependencies, which count as wildcards;
+# registry wildcards are what this check exists to catch, so keep it at warn.
+wildcards = "warn"
+highlight = "all"
+
+# The dependency tree is pulled from crates.io except GPUI and its forked
+# crates, which are pinned to Zed revisions (see Cargo.toml/Cargo.lock).
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-org = { github = ["zed-industries"] }
+
+# Orion is GPL-3.0; dependencies must carry GPL-compatible licenses.
+# Keep this list in sync with `cargo deny check licenses`.
+[licenses]
+version = 2
+allow = [
+  "0BSD",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "bzip2-1.0.6",
+  "CC0-1.0",
+  "GPL-3.0",
+  "GPL-3.0-or-later",
+  "ISC",
+  "MIT",
+  "MIT-0",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Zlib",
+]
+confidence-threshold = 0.8

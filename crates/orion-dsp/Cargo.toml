@@ -1,0 +1,11 @@
+[package]
+name = "orion-dsp"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0"
+description = "Real-time-safe DSP primitives for Orion"
+homepage = "https://github.com/gardun0/orion"
+repository = "https://github.com/gardun0/orion"
+
+[dependencies]
+dasp = { version = "0.11", default-features = false, features = ["std", "signal"] }

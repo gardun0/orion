@@ -1,0 +1,201 @@
+name: Release
+
+# A single workflow on purpose: tags/releases created by release-please use
+# GITHUB_TOKEN, and events produced by GITHUB_TOKEN do not trigger other
+# workflows. Packaging therefore lives in the same run, gated on the
+# release-please outputs.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release-please:
+    name: release-please
+    runs-on: ubuntu-latest
+    outputs:
+      releases_created: ${{ steps.release.outputs.releases_created }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve released version
+        id: version
+        if: steps.release.outputs.releases_created == 'true'
+        run: echo "version=$(jq -r 'to_entries[0].value' .release-please-manifest.json)" >> "$GITHUB_OUTPUT"
+
+  package:
+    name: Build & package
+    needs: release-please
+    if: needs.release-please.outputs.releases_created == 'true'
+    # ubuntu-22.04 keeps the AppImage/binary compatible with older glibc.
+    runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.release-please.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release-please.outputs.version }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang mold pkg-config cmake curl ca-certificates fuse \
+            libasound2-dev libfontconfig-dev libwayland-dev \
+            libx11-xcb-dev libxcb-xkb-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libpipewire-0.3-dev libspa-0.2-dev libclang-dev libssl-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install packaging tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb, cargo-generate-rpm
+
+      - name: Build release binary
+        run: |
+          cargo build --release --locked
+          strip target/release/orion
+
+      - name: Assemble tarball
+        run: |
+          staging="target/release-staging"
+          mkdir -p "$staging" dist
+          cp target/release/orion "$staging/orion"
+          cp assets/linux/io.github.gardun0.orion.desktop "$staging/"
+          cp assets/linux/io.github.gardun0.orion.metainfo.xml "$staging/"
+          cp assets/app-icon/io.github.gardun0.orion.svg "$staging/"
+          cp assets/app-icon/io.github.gardun0.orion-*.png "$staging/"
+          cp LICENSE README.md "$staging/"
+          tar -czf "dist/orion-v${VERSION}-x86_64-unknown-linux-gnu.tar.gz" -C "$staging" .
+
+      - name: Build Debian package
+        run: |
+          cargo deb --no-build
+          cp target/debian/*.deb "dist/orion_${VERSION}_amd64.deb"
+
+      - name: Build RPM package
+        run: |
+          cargo generate-rpm
+          cp target/generate-rpm/*.rpm "dist/orion-${VERSION}-1.x86_64.rpm"
+
+      - name: Build AppImage
+        run: packaging/appimage/build-appimage.sh dist
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
+  publish:
+    name: Upload release assets
+    needs: [release-please, package]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.release-please.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Upload assets to GitHub Release
+        run: gh release upload "v${VERSION}" dist/* --clobber
+      - name: Mark pre-1.0 releases as prerelease
+        if: startsWith(needs.release-please.outputs.version, '0.')
+        run: gh release edit "v${VERSION}" --prerelease
+
+  aur:
+    name: Publish to AUR (orion-bin)
+    needs: [release-please, publish]
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    env:
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+      VERSION: ${{ needs.release-please.outputs.version }}
+    steps:
+      # The job skips cleanly until the AUR_SSH_PRIVATE_KEY secret exists.
+      - name: Check AUR credentials
+        id: guard
+        run: |
+          if [ -z "${AUR_SSH_PRIVATE_KEY}" ]; then
+            echo "::notice::AUR_SSH_PRIVATE_KEY not set; skipping AUR publish"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Prepare environment
+        if: steps.guard.outputs.available == 'true'
+        run: |
+          pacman -Sy --noconfirm --needed openssh git >/dev/null
+          useradd -m builder
+          mkdir -p /home/builder/.ssh
+          echo "${AUR_SSH_PRIVATE_KEY}" > /home/builder/.ssh/id_ed25519
+          chmod 600 /home/builder/.ssh/id_ed25519
+          ssh-keyscan aur.archlinux.org >> /home/builder/.ssh/known_hosts
+          chown -R builder:builder /home/builder/.ssh
+
+      - uses: actions/checkout@v4
+        if: steps.guard.outputs.available == 'true'
+
+      - uses: actions/download-artifact@v4
+        if: steps.guard.outputs.available == 'true'
+        with:
+          name: dist
+          path: dist
+
+      - name: Checkout AUR repository
+        if: steps.guard.outputs.available == 'true'
+        run: |
+          runuser -u builder -- git clone ssh://aur@aur.archlinux.org/orion-bin.git /home/builder/orion-bin
+
+      - name: Render PKGBUILD and .SRCINFO
+        if: steps.guard.outputs.available == 'true'
+        env:
+          GIT_AUTHOR_NAME: ${{ vars.AUR_GIT_NAME || 'orion-ci' }}
+          GIT_AUTHOR_EMAIL: ${{ vars.AUR_GIT_EMAIL || 'ci@gardun0.invalid' }}
+          GIT_COMMITTER_NAME: ${{ vars.AUR_GIT_NAME || 'orion-ci' }}
+          GIT_COMMITTER_EMAIL: ${{ vars.AUR_GIT_EMAIL || 'ci@gardun0.invalid' }}
+        run: |
+          set -euo pipefail
+          repo=/home/builder/orion-bin
+          tarball="orion-v${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          sha256="$(awk -v f="$tarball" '$2 == f { print $1 }' dist/SHA256SUMS.txt)"
+          test -n "$sha256"
+          cp packaging/aur/PKGBUILD "$repo/PKGBUILD"
+          sed -i "s/^pkgver=.*/pkgver=${VERSION}/" "$repo/PKGBUILD"
+          sed -i "s/^pkgrel=.*/pkgrel=1/" "$repo/PKGBUILD"
+          sed -i "s/^sha256sums=.*/sha256sums=('${sha256}')/" "$repo/PKGBUILD"
+          chown -R builder:builder "$repo"
+          cd "$repo"
+          runuser -u builder -- sh -c 'makepkg --printsrcinfo > .SRCINFO'
+          runuser -u builder -- git add PKGBUILD .SRCINFO
+          runuser -u builder -- git -c user.name="${GIT_AUTHOR_NAME}" -c user.email="${GIT_AUTHOR_EMAIL}" \
+            commit -m "chore: release v${VERSION}"
+          runuser -u builder -- git push

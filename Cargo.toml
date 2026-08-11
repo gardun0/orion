@@ -1,31 +1,42 @@
+[workspace]
+members = [".", "crates/orion-dsp"]
+resolver = "2"
+
 [package]
 name = "orion"
 version = "0.1.0"
 edition = "2021"
-description = "Free Software cross-platform virtual audio mixer"
+description = "Free software audio mixer and routing workspace for Linux"
 license = "GPL-3.0"
+authors = ["gardun0"]
+homepage = "https://github.com/gardun0/orion"
+repository = "https://github.com/gardun0/orion"
+keywords = ["audio", "mixer", "pipewire", "routing"]
+categories = ["multimedia::audio"]
 
 [[bin]]
 name = "orion"
 path = "src/main.rs"
 
 [dependencies]
-gpui              = { git = "https://github.com/zed-industries/zed", package = "gpui" }
-gpui_platform     = { git = "https://github.com/zed-industries/zed", package = "gpui_platform", features = ["wayland", "x11"] }
-cpal              = "0.15"
+gpui              = { git = "https://github.com/zed-industries/zed", rev = "ae394f3d474f4996d2cdef6ee97551fdb6748acd", package = "gpui" }
+gpui_platform     = { git = "https://github.com/zed-industries/zed", rev = "ae394f3d474f4996d2cdef6ee97551fdb6748acd", package = "gpui_platform", features = ["wayland", "x11"] }
 crossbeam-channel = "0.5"
 rtrb              = "0.3"
 arc-swap          = "1"
 log               = "0.4"
 env_logger        = "0.11"
 thiserror         = "1"
+image             = { version = "0.25", default-features = false, features = ["png"] }
+orion-dsp         = { path = "crates/orion-dsp" }
+serde             = { version = "1", features = ["derive"] }
+serde_json        = "1"
+uuid              = { version = "1", features = ["serde", "v4", "v5"] }
+notify = { version = "8.2.0", default-features = false }
+schemars = { version = "1", features = ["uuid1"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-pipewire = { version = "0.8", optional = true }
-
-[features]
-default = []
-virtual-devices = ["pipewire"]
+pipewire = { version = "0.10", features = ["v0_3_41"] }
 
 [profile.dev]
 opt-level = 1
@@ -34,3 +45,44 @@ opt-level = 1
 opt-level = 3
 lto = "thin"
 codegen-units = 1
+
+[dev-dependencies]
+jsonschema = "0.49"
+
+# --- Debian package (`cargo deb`) -------------------------------------------
+[package.metadata.deb]
+maintainer = "gardun0"
+section = "sound"
+priority = "optional"
+depends = "$auto"
+assets = [
+  ["target/release/orion", "usr/bin/", "755"],
+  ["assets/linux/io.github.gardun0.orion.desktop", "usr/share/applications/", "644"],
+  ["assets/linux/io.github.gardun0.orion.metainfo.xml", "usr/share/metainfo/", "644"],
+  ["assets/app-icon/io.github.gardun0.orion.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+  ["assets/app-icon/io.github.gardun0.orion-32.png", "usr/share/icons/hicolor/32x32/apps/io.github.gardun0.orion.png", "644"],
+  ["assets/app-icon/io.github.gardun0.orion-48.png", "usr/share/icons/hicolor/48x48/apps/io.github.gardun0.orion.png", "644"],
+  ["assets/app-icon/io.github.gardun0.orion-64.png", "usr/share/icons/hicolor/64x64/apps/io.github.gardun0.orion.png", "644"],
+  ["assets/app-icon/io.github.gardun0.orion-128.png", "usr/share/icons/hicolor/128x128/apps/io.github.gardun0.orion.png", "644"],
+  ["assets/app-icon/io.github.gardun0.orion-256.png", "usr/share/icons/hicolor/256x256/apps/io.github.gardun0.orion.png", "644"],
+  ["assets/app-icon/io.github.gardun0.orion-512.png", "usr/share/icons/hicolor/512x512/apps/io.github.gardun0.orion.png", "644"],
+  ["LICENSE", "usr/share/doc/orion/copyright", "644"],
+]
+
+# --- RPM package (`cargo generate-rpm`) --------------------------------------
+[package.metadata.generate-rpm]
+vendor = "gardun0"
+group = "Applications/Multimedia"
+assets = [
+  { source = "target/release/orion", dest = "/usr/bin/orion", mode = "755" },
+  { source = "assets/linux/io.github.gardun0.orion.desktop", dest = "/usr/share/applications/io.github.gardun0.orion.desktop", mode = "644" },
+  { source = "assets/linux/io.github.gardun0.orion.metainfo.xml", dest = "/usr/share/metainfo/io.github.gardun0.orion.metainfo.xml", mode = "644" },
+  { source = "assets/app-icon/io.github.gardun0.orion.svg", dest = "/usr/share/icons/hicolor/scalable/apps/io.github.gardun0.orion.svg", mode = "644" },
+  { source = "assets/app-icon/io.github.gardun0.orion-32.png", dest = "/usr/share/icons/hicolor/32x32/apps/io.github.gardun0.orion.png", mode = "644" },
+  { source = "assets/app-icon/io.github.gardun0.orion-48.png", dest = "/usr/share/icons/hicolor/48x48/apps/io.github.gardun0.orion.png", mode = "644" },
+  { source = "assets/app-icon/io.github.gardun0.orion-64.png", dest = "/usr/share/icons/hicolor/64x64/apps/io.github.gardun0.orion.png", mode = "644" },
+  { source = "assets/app-icon/io.github.gardun0.orion-128.png", dest = "/usr/share/icons/hicolor/128x128/apps/io.github.gardun0.orion.png", mode = "644" },
+  { source = "assets/app-icon/io.github.gardun0.orion-256.png", dest = "/usr/share/icons/hicolor/256x256/apps/io.github.gardun0.orion.png", mode = "644" },
+  { source = "assets/app-icon/io.github.gardun0.orion-512.png", dest = "/usr/share/icons/hicolor/512x512/apps/io.github.gardun0.orion.png", mode = "644" },
+  { source = "LICENSE", dest = "/usr/share/licenses/orion/LICENSE", mode = "644" },
+]

@@ -1,0 +1,298 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SessionDocument",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "JSON Schema reference for editor support (autocomplete/validation).",
+      "type": "string",
+      "default": "./settings.schema.json"
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "settings": {
+      "$ref": "#/$defs/PersistedSettings",
+      "default": {
+        "sample_rate": 0,
+        "buffer_size": 0,
+        "outputs_panel_width": 0.0,
+        "master_muted": false
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PersistedChannel"
+      },
+      "default": []
+    },
+    "outputs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PersistedChannel"
+      },
+      "default": []
+    },
+    "virtual_devices": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PersistedVirtualDevice"
+      },
+      "default": []
+    },
+    "routes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PersistedRoute"
+      },
+      "default": []
+    },
+    "scenes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PersistedScene"
+      },
+      "default": []
+    },
+    "selected_scene": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0,
+      "default": 0
+    }
+  },
+  "required": [
+    "schema_version"
+  ],
+  "$defs": {
+    "PersistedSettings": {
+      "type": "object",
+      "properties": {
+        "sample_rate": {
+          "description": "Orion-local sample rate for new route streams.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 0
+        },
+        "buffer_size": {
+          "description": "Orion-local latency hint (`node.latency`) for new route streams.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 0
+        },
+        "outputs_panel_width": {
+          "description": "Mixer outputs panel width in pixels (0 falls back to the default).",
+          "type": "number",
+          "format": "float",
+          "default": 0.0
+        },
+        "master_muted": {
+          "description": "MUTE ALL state (outputs), persisted so a muted rig stays muted.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "PersistedChannel": {
+      "description": "A mixer channel persisted by stable identity: name + endpoint id (a\ndeterministic UUIDv5 over the PipeWire identity) or virtual device id.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "color": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "kind": {
+          "type": "string"
+        },
+        "gain_db": {
+          "type": "number",
+          "format": "float"
+        },
+        "muted": {
+          "type": "boolean"
+        },
+        "delay_ms": {
+          "description": "Per-channel sync delay in milliseconds.",
+          "type": "number",
+          "format": "float",
+          "default": 0.0
+        },
+        "mode": {
+          "description": "Channel mapping mode (mono downmix, single channel, swap...).",
+          "$ref": "#/$defs/ChannelMode",
+          "default": "auto"
+        },
+        "eq_low_db": {
+          "description": "3-band EQ gains in dB (low shelf / mid bell / high shelf).",
+          "type": "number",
+          "format": "float",
+          "default": 0.0
+        },
+        "eq_mid_db": {
+          "type": "number",
+          "format": "float",
+          "default": 0.0
+        },
+        "eq_high_db": {
+          "type": "number",
+          "format": "float",
+          "default": 0.0
+        },
+        "endpoint": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "endpoint_name": {
+          "description": "Display name of the bound device, so an offline selection can show\nwhat it is waiting for across restarts.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "name",
+        "color",
+        "kind",
+        "gain_db",
+        "muted"
+      ]
+    },
+    "ChannelMode": {
+      "description": "How a channel's audio is mapped between its endpoint and the mix.",
+      "oneOf": [
+        {
+          "description": "Follow the endpoint's channel layout (default).",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Force stereo passthrough.",
+          "type": "string",
+          "const": "stereo"
+        },
+        {
+          "description": "Downmix to mono (L+R)/2 on every channel.",
+          "type": "string",
+          "const": "mono"
+        },
+        {
+          "description": "Use only the left channel.",
+          "type": "string",
+          "const": "left"
+        },
+        {
+          "description": "Use only the right channel.",
+          "type": "string",
+          "const": "right"
+        },
+        {
+          "description": "Swap left and right.",
+          "type": "string",
+          "const": "swap"
+        }
+      ]
+    },
+    "PersistedVirtualDevice": {
+      "type": "object",
+      "properties": {
+        "virtual_device_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "endpoint_type": {
+          "$ref": "#/$defs/EndpointType"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "virtual_device_id",
+        "endpoint_type",
+        "name"
+      ]
+    },
+    "EndpointType": {
+      "type": "string",
+      "enum": [
+        "physical_input",
+        "physical_output",
+        "application_input",
+        "application_output",
+        "virtual_input",
+        "virtual_output",
+        "internal_bus"
+      ]
+    },
+    "PersistedRoute": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "destination": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "source",
+        "destination"
+      ]
+    },
+    "PersistedScene": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PersistedChannel"
+          },
+          "default": []
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PersistedChannel"
+          },
+          "default": []
+        },
+        "routes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PersistedRoute"
+          },
+          "default": []
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  }
+}

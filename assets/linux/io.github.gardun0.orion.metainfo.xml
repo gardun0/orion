@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.gardun0.orion</id>
+  <name>Orion</name>
+  <summary>Audio mixer and routing workspace for Linux</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0</project_license>
+  <developer id="io.github.gardun0">
+    <name>gardun0</name>
+  </developer>
+  <description>
+    <p>
+      Orion is a free software audio mixer and routing workspace for Linux,
+      built in Rust with GPUI. It provides a mixer console for physical,
+      application, desktop, and virtual audio sources, physical and virtual
+      output buses, a routing matrix, scenes, and engine settings.
+    </p>
+    <p>
+      Orion is under active development: the current milestone delivers the
+      complete mixer interface and PipeWire device discovery, while the audio
+      engine and virtual devices are being connected incrementally.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.gardun0.orion.desktop</launchable>
+  <url type="homepage">https://github.com/gardun0/orion</url>
+  <url type="bugtracker">https://github.com/gardun0/orion/issues</url>
+  <url type="vcs-browser">https://github.com/gardun0/orion</url>
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+  </categories>
+  <keywords>
+    <keyword>audio</keyword>
+    <keyword>mixer</keyword>
+    <keyword>routing</keyword>
+    <keyword>pipewire</keyword>
+    <keyword>virtual</keyword>
+  </keywords>
+  <content_rating type="oars-1.1"/>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <releases>
+    <release version="0.1.0" date="2026-08-09" type="development"/>
+  </releases>
+</component>
