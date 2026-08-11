@@ -64,10 +64,11 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
+      # Compiled from source: the prebuilt binaries target GLIBC 2.39+, which
+      # is newer than this runner's glibc (ubuntu-22.04, chosen so the
+      # AppImage/tarball keep working on older distros).
       - name: Install packaging tools
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deb, cargo-generate-rpm
+        run: cargo install cargo-deb cargo-generate-rpm --locked
 
       - name: Build release binary
         run: |
