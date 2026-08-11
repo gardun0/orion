@@ -8,6 +8,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Re-package an existing release, e.g. 0.1.2 (skips release-please)"
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -39,21 +44,24 @@ jobs:
   package:
     name: Build & package
     needs: release-please
-    if: needs.release-please.outputs.releases_created == 'true'
-    # ubuntu-22.04 keeps the AppImage/binary compatible with older glibc.
-    runs-on: ubuntu-22.04
+    if: >-
+      (github.event_name == 'push' && needs.release-please.outputs.releases_created == 'true')
+      || (github.event_name == 'workflow_dispatch' && inputs.version != '')
+    # ubuntu-24.04: the pipewire crate needs PipeWire 1.x headers (22.04 ships
+    # 0.3.48, which fails to build). Binary floor: glibc 2.39, PipeWire 1.0.
+    runs-on: ubuntu-24.04
     env:
-      VERSION: ${{ needs.release-please.outputs.version }}
+      VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || needs.release-please.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: v${{ needs.release-please.outputs.version }}
+          ref: v${{ github.event_name == 'workflow_dispatch' && inputs.version || needs.release-please.outputs.version }}
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang mold pkg-config cmake curl ca-certificates fuse \
+            clang mold pkg-config cmake curl ca-certificates \
             libasound2-dev libfontconfig-dev libwayland-dev \
             libx11-xcb-dev libxcb-xkb-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libpipewire-0.3-dev libspa-0.2-dev libclang-dev libssl-dev
@@ -119,7 +127,7 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
-      VERSION: ${{ needs.release-please.outputs.version }}
+      VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || needs.release-please.outputs.version }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -138,7 +146,7 @@ jobs:
     container: archlinux:base-devel
     env:
       AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-      VERSION: ${{ needs.release-please.outputs.version }}
+      VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || needs.release-please.outputs.version }}
     steps:
       # The job skips cleanly until the AUR_SSH_PRIVATE_KEY secret exists.
       - name: Check AUR credentials
