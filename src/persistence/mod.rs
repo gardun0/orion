@@ -217,19 +217,14 @@ impl SessionStore {
         Self { path }
     }
 
-    /// Canonical config location: `$XDG_CONFIG_HOME/orion/settings.json`
-    /// (or `~/.config/orion/settings.json`). Migrates the legacy
-    /// `session-v1.json` on first launch.
+    /// Canonical config location via the platform's conventions: on Linux
+    /// `$XDG_CONFIG_HOME/orion/settings.json` (or `~/.config/orion/`), on
+    /// Windows under `%APPDATA%`, on macOS under `~/Library/Application
+    /// Support`. Migrates the legacy `session-v1.json` on first launch.
     pub fn default_path() -> Result<PathBuf, PersistenceError> {
-        let directory = if let Some(root) = std::env::var_os("XDG_CONFIG_HOME") {
-            PathBuf::from(root).join("orion")
-        } else {
-            std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .map(|home| home.join(".config/orion"))
-                .ok_or(PersistenceError::ConfigurationDirectoryUnavailable)?
-        };
-        Ok(settings_path_in(&directory))
+        let project = directories::ProjectDirs::from("io.github", "gardun0", "orion")
+            .ok_or(PersistenceError::ConfigurationDirectoryUnavailable)?;
+        Ok(settings_path_in(project.config_dir()))
     }
 
     /// Last modification time of the settings file, if it exists.

@@ -34,12 +34,19 @@ jobs:
       - uses: wagoid/commitlint-github-action@v6
 
   build:
-    name: clippy, check & unit tests
-    runs-on: ubuntu-latest
+    name: clippy, check & unit tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
+      # Windows runners ship the Vulkan SDK and macOS runners Xcode; neither
+      # needs extra system packages. Only Linux does.
       - name: Install system dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -67,6 +74,29 @@ jobs:
       # `cargo test -- --ignored` on a machine with a PipeWire session.
       - name: test
         run: cargo test --workspace --locked
+
+  # Portability gate for the Windows/macOS ports: the cpal backend and all
+  # platform-gated code must keep compiling on every target OS. No audio
+  # runs here — this is compilation and lint coverage only.
+  portability:
+    name: portability (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: check
+        run: cargo check --workspace --all-targets --locked
 
   packaging-metadata:
     name: Validate packaging metadata

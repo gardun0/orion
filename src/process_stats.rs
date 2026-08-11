@@ -1,13 +1,22 @@
-//! Process CPU usage sampling for the footer readout (Linux /proc).
+//! Process CPU usage sampling for the footer readout. Linux reads
+//! /proc/self/stat; other platforms simply hide the readout for now.
 
 /// Cumulative CPU ticks (utime + stime) from /proc/self/stat.
+#[cfg(target_os = "linux")]
 pub(crate) fn read_process_ticks() -> Option<u64> {
     let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
     parse_process_ticks(&stat)
 }
 
+/// Not implemented off Linux: the footer shows nothing.
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn read_process_ticks() -> Option<u64> {
+    None
+}
+
 /// Parse utime + stime (fields 14-15) from a /proc stat line; the command
 /// name in parentheses may contain spaces, so split after the last paren.
+#[cfg(target_os = "linux")]
 fn parse_process_ticks(stat: &str) -> Option<u64> {
     let after = stat.rsplit_once(')')?.1.trim();
     let mut fields = after.split_whitespace();
@@ -16,7 +25,7 @@ fn parse_process_ticks(stat: &str) -> Option<u64> {
     Some(utime + stime)
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
 

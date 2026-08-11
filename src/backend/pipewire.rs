@@ -17,14 +17,15 @@ use super::streams::{
     STREAM_FAILED,
 };
 use super::{AudioBackend, BackendCommand, BackendEvent, BackendStatus};
+#[cfg(test)]
+use crate::domain::ChannelId;
 use crate::domain::{
-    AudioEndpoint, AudioError, AudioRoute, ChannelId, DeviceId, EndpointId, EndpointIdentity,
-    EndpointState, EndpointType, ErrorCode, ErrorSeverity, GainDb, MeterFrame, MeterLevel,
-    NormalizedBalance, RouteId, RouteState, VirtualDeviceId,
+    stable_channel_id, stable_device_id, stable_endpoint_id, AudioEndpoint, AudioError, AudioRoute,
+    EndpointId, EndpointIdentity, EndpointState, EndpointType, ErrorCode, ErrorSeverity, GainDb,
+    MeterFrame, MeterLevel, NormalizedBalance, RouteId, RouteState, VirtualDeviceId,
 };
 use crate::realtime::{ControlHub, RouteLink, TARGET_QUANTA};
 
-const ORION_ID_NAMESPACE: Uuid = Uuid::from_u128(0x56ef_da46_0a0a_4f64_a31e_3f76_74fc_b476);
 const DEFAULT_METADATA_NAME: &str = "default";
 const SETTINGS_METADATA_NAME: &str = "settings";
 const DEFAULT_AUDIO_SOURCE: &str = "default.audio.source";
@@ -209,11 +210,20 @@ fn meter_frame_for(
         .channels
         .iter()
         .copied()
-        .zip(meter.levels())
-        .map(|(channel, peak)| {
-            let level =
-                MeterLevel::new(peak.clamp(MeterLevel::MIN, MeterLevel::MAX)).unwrap_or_default();
-            (channel, level)
+        .zip(meter.readings())
+        .map(|(channel, reading)| {
+            let peak = MeterLevel::new(reading.peak.clamp(MeterLevel::MIN, MeterLevel::MAX))
+                .unwrap_or_default();
+            let rms = MeterLevel::new(reading.rms.clamp(MeterLevel::MIN, MeterLevel::MAX))
+                .unwrap_or_default();
+            (
+                channel,
+                crate::domain::ChannelLevels {
+                    peak,
+                    rms,
+                    clipped: reading.clipped,
+                },
+            )
         })
         .collect();
     Some(MeterFrame {
@@ -1596,39 +1606,6 @@ fn endpoint_type(media_class: &str, is_virtual: bool) -> Option<EndpointType> {
     } else {
         None
     }
-}
-
-fn stable_endpoint_id(identity: &EndpointIdentity, endpoint_type: EndpointType) -> EndpointId {
-    let key = format!(
-        "{:?}|{}|{}|{}|{}|{}|{}|{}",
-        endpoint_type,
-        identity.serial.as_deref().unwrap_or(""),
-        identity.bus.as_deref().unwrap_or(""),
-        identity.vendor.as_deref().unwrap_or(""),
-        identity.product.as_deref().unwrap_or(""),
-        identity.device_name.as_deref().unwrap_or(""),
-        identity.node_name.as_deref().unwrap_or(""),
-        identity.profile.as_deref().unwrap_or("")
-    );
-    EndpointId::from_uuid(Uuid::new_v5(&ORION_ID_NAMESPACE, key.as_bytes()))
-}
-
-fn stable_device_id(identity: &EndpointIdentity) -> Option<DeviceId> {
-    let key = identity
-        .serial
-        .as_deref()
-        .or(identity.device_name.as_deref())?;
-    Some(DeviceId::from_uuid(Uuid::new_v5(
-        &ORION_ID_NAMESPACE,
-        format!("device|{key}").as_bytes(),
-    )))
-}
-
-fn stable_channel_id(endpoint_id: EndpointId, index: u32) -> ChannelId {
-    ChannelId::from_uuid(Uuid::new_v5(
-        &ORION_ID_NAMESPACE,
-        format!("channel|{endpoint_id}|{index}").as_bytes(),
-    ))
 }
 
 fn virtual_id_from_name(name: &str, prefix: &str) -> Option<VirtualDeviceId> {

@@ -106,6 +106,21 @@ fn mapped_frame(input: &[f32], destination_channel: usize, destination_channels:
     }
 }
 
+/// The stereo pair transform behind every channel mode. Auto/Stereo are the
+/// identity; used both by the plain post-pass and by the crossfade blend.
+pub fn mode_map(mode: ChannelMode, left: f32, right: f32) -> (f32, f32) {
+    match mode {
+        ChannelMode::Mono => {
+            let mono = (left + right) * 0.5;
+            (mono, mono)
+        }
+        ChannelMode::Left => (left, left),
+        ChannelMode::Right => (right, right),
+        ChannelMode::Swap => (right, left),
+        ChannelMode::Auto | ChannelMode::Stereo => (left, right),
+    }
+}
+
 /// Output-side channel mode as a post-pass over an interleaved block.
 /// Stereo-only modes are no-ops for non-stereo streams.
 pub fn apply_output_mode(mode: ChannelMode, samples: &mut [f32], channels: usize) {
@@ -114,18 +129,26 @@ pub fn apply_output_mode(mode: ChannelMode, samples: &mut [f32], channels: usize
     }
     for frame in samples.chunks_exact_mut(2) {
         let (left, right) = (frame[0], frame[1]);
-        let (new_left, new_right) = match mode {
-            ChannelMode::Mono => {
-                let mono = (left + right) * 0.5;
-                (mono, mono)
-            }
-            ChannelMode::Left => (left, left),
-            ChannelMode::Right => (right, right),
-            ChannelMode::Swap => (right, left),
-            ChannelMode::Auto | ChannelMode::Stereo => (left, right),
-        };
+        let (new_left, new_right) = mode_map(mode, left, right);
         frame[0] = new_left;
         frame[1] = new_right;
+    }
+}
+
+/// Blend between two channel modes over `mix` (0.0 = previous, 1.0 = next).
+/// Applied to an already-rendered interleaved block; stereo buses only.
+pub fn apply_output_mode_crossfade(
+    previous: ChannelMode,
+    next: ChannelMode,
+    mix: &mut orion_dsp::ParameterSmoother,
+    samples: &mut [f32],
+) {
+    for frame in samples.chunks_exact_mut(2) {
+        let t = mix.next_value();
+        let (old_left, old_right) = mode_map(previous, frame[0], frame[1]);
+        let (new_left, new_right) = mode_map(next, frame[0], frame[1]);
+        frame[0] = old_left + (new_left - old_left) * t;
+        frame[1] = old_right + (new_right - old_right) * t;
     }
 }
 

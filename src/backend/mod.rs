@@ -1,3 +1,5 @@
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+mod cpal_backend;
 mod fake;
 #[cfg(target_os = "linux")]
 mod pipewire;
@@ -15,6 +17,20 @@ use crate::domain::{
 pub use fake::FakeBackend;
 #[cfg(target_os = "linux")]
 pub use pipewire::PipeWireBackend;
+
+/// The platform's backend: PipeWire on Linux (strictly richer: virtual
+/// devices, app streams, graph routing), cpal on Windows/macOS.
+#[cfg(target_os = "linux")]
+pub fn default_backend() -> PipeWireBackend {
+    PipeWireBackend
+}
+
+/// The platform's backend: PipeWire on Linux (strictly richer: virtual
+/// devices, app streams, graph routing), cpal on Windows/macOS.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+pub fn default_backend() -> cpal_backend::CpalBackend {
+    cpal_backend::CpalBackend
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

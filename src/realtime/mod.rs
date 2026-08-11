@@ -29,9 +29,9 @@ mod stage;
 
 pub use controls::{ChannelControls, ControlHub, EndpointControls, MAX_DELAY_MS};
 pub use engine::{
-    BusEngine, BusHandle, BusInbox, BusPlan, PlanReclaimer, PlanSlot, Planned, RetiredConsumer,
-    RetiredProducer, RouteFeed, RouteLink, SourceEngine, SourceHandle, SourceInbox, SourcePlan,
-    MAX_ROUTES_PER_ENDPOINT,
+    BusEngine, BusHandle, BusInbox, BusPlan, BusPublisher, PlanReclaimer, PlanSlot, Planned,
+    RetiredConsumer, RetiredProducer, RouteFeed, RouteLink, SourceEngine, SourceHandle,
+    SourceInbox, SourcePlan, SourcePublisher, MAX_ROUTES_PER_ENDPOINT,
 };
 pub use meter::RouteMeter;
 pub use stage::{

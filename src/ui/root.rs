@@ -18,7 +18,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use orion::{
     app_engine::{AudioEngine, EngineHandle},
-    backend::PipeWireBackend,
+    backend,
     domain::{
         AudioEndpoint, ChannelId, CommandId, EndpointId, EndpointIdentity, EndpointState,
         EndpointType, EngineCommand, EngineCommandKind, EngineEvent, EngineStatus, ErrorCode,
@@ -64,7 +64,7 @@ impl RootView {
         let mut state = AppState::new(Vec::new());
         let rename_focus = cx.focus_handle();
         let root_focus = cx.focus_handle();
-        let (audio_engine, engine_handle) = match AudioEngine::start(PipeWireBackend) {
+        let (audio_engine, engine_handle) = match AudioEngine::start(backend::default_backend()) {
             Ok((engine, handle)) => (Some(engine), Some(handle)),
             Err(error) => {
                 state.set_device_monitor_error(error.user_message);
@@ -3701,7 +3701,7 @@ impl RootView {
                 .await;
             let started = cx
                 .background_executor()
-                .spawn(async move { AudioEngine::start(PipeWireBackend) });
+                .spawn(async move { AudioEngine::start(backend::default_backend()) });
             let started = started.await;
             this.update(cx, |this, cx| {
                 match started {

@@ -27,11 +27,21 @@ pub enum GraphDelta {
     RouteRemoved { route_id: RouteId },
 }
 
+/// One channel's meter reading for a window: absolute peak, RMS, and a clip
+/// flag set when the signal reached full scale (for buses, before the
+/// saturator — clipping stays visible even though the output is bounded).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChannelLevels {
+    pub peak: MeterLevel,
+    pub rms: MeterLevel,
+    pub clipped: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MeterFrame {
     pub endpoint_id: EndpointId,
     pub sequence: u64,
-    pub levels: HashMap<ChannelId, MeterLevel>,
+    pub levels: HashMap<ChannelId, ChannelLevels>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

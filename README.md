@@ -29,11 +29,14 @@ review, and direction remain human.
 Orion is at `0.x` (pre-release), and the mixer is live: devices are discovered
 with hot-plug (and sleep/wake recovery), virtual inputs/outputs are created
 automatically and managed from the UI, and routes carry real audio through the
-real-time DSP engine. Every channel has a fader, mute, sync delay, 3-band EQ,
-and a channel-mode switch; meters, scenes (which track the mixer live while
-selected), and settings persist across restarts. Remaining work before `1.0`
-focuses on engine telemetry (latency and XRuns; CPU load is already in the
-footer), gaming EQ presets, and macOS/Windows backends — see the
+real-time block engine — every destination bus is summed in-process, clock
+drift between devices is corrected transparently, and an always-on saturator
+protects each mix. Every channel has a fader, mute, sync delay, 3-band EQ, and
+a click-free channel-mode switch; peak/RMS meters with clip indication, scenes
+(which track the mixer live while selected), and settings persist across
+restarts. Remaining work before `1.0` focuses on engine telemetry (latency and
+XRuns; CPU load is already in the footer), gaming EQ presets, and validating
+the macOS/Windows backends that now compile in CI — see the
 [feature tables](#features).
 
 ## Features
@@ -42,14 +45,15 @@ footer), gaming EQ presets, and macOS/Windows backends — see the
 
 | | |
 |---|---|
-| ![](assets/docs/mix.png) | **Live mixing console** — physical, application, desktop, and virtual source strips routed to physical (`A`) and virtual (`B`) output buses, mixed in real time over PipeWire streams |
+| ![](assets/docs/mix.png) | **Live mixing console** — physical, application, desktop, and virtual source strips routed to physical (`A`) and virtual (`B`) output buses, each bus summed sample-accurately in the real-time block engine |
 | ![](assets/docs/sound.png) | **Channel controls** — interactive faders (-60…+10 dB, Shift for fine adjust, double-click to reset), per-strip mute, and master mute |
 | ![](assets/docs/eq.png) | **Per-channel EQ & delay** — a 3-band EQ (low shelf / mid bell / high shelf, ±12 dB) and a sync delay knob (0–500 ms) on every source and output, live in the real-time path |
-| ![](assets/docs/configuration.png) | **Channel modes** — Auto, Stereo, Mono, Left, Right, and Swap per channel, applied live in the channel mapping |
+| ![](assets/docs/configuration.png) | **Channel modes** — Auto, Stereo, Mono, Left, Right, and Swap per channel, switched click-free with a short crossfade in the real-time path |
 | ![](assets/docs/route.png) | **Routing** — per-strip route buttons and a routing matrix, both driving live PipeWire route streams; routing intent survives device sleep, hot-plug, and rebinding, and self-heals if a route stalls |
 | ![](assets/docs/virtual.png) | **Virtual devices** — virtual inputs that receive audio from applications and virtual outputs that applications can use as microphones; created automatically and managed from the UI |
 | ![](assets/docs/physical.png) ![](assets/docs/app.png) | **Endpoint discovery** — PipeWire sources and sinks, default device tracking, and hot-plug updates |
-| ![](assets/docs/sound.png) | **Live meters** — elastic per-channel L/R meters (−90…0 dB with peak-hold marks) fed by the real-time engine, plus process CPU load in the footer |
+| ![](assets/docs/sound.png) | **Live meters** — elastic per-channel L/R meters (−90…0 dB with peak-hold marks and RMS markers) fed by the real-time engine, a per-strip clip LED, plus process CPU load in the footer |
+| ![](assets/docs/sound.png) | **Clipping protection** — an always-on soft-knee saturator (−1 dBFS knee) bounds every bus post-mix; clip detection runs pre-saturator, so driving a bus stays visible on the meter |
 | ![](assets/docs/scenes.png) | **Scenes & settings** — scenes track the mixer live while selected; everything persists to `settings.json` (schema v2) with atomic autosave, live reload on external edits, import/export, and a published JSON Schema ([`schema/settings.schema.json`](schema/settings.schema.json)) |
 | ![](assets/docs/configuration.png) | **Native desktop app** — GPUI interface with Wayland and X11 support, embedded fonts and icons, no runtime asset dependencies |
 
@@ -59,7 +63,7 @@ footer), gaming EQ presets, and macOS/Windows backends — see the
 |---|---|
 | ![](assets/docs/sound.png) | **Engine telemetry** — latency and XRun stats (CPU load and live level meters already work) |
 | ![](assets/docs/eq.png) | **EQ presets for gaming** — named profiles tuned for titles like Warzone and CS2, built on the 3-band EQ that already works per endpoint |
-| ![](assets/docs/platforms.png) | **macOS & Windows support** — GPUI is cross-platform; each OS needs its own native audio backend alongside PipeWire |
+| ![](assets/docs/platforms.png) | **macOS & Windows support** — a cpal-based backend drives the same real-time engine on both OSes and is compile-gated in CI; runtime validation and packaging come next |
 
 Have an idea that's not on the list?
 [Open an issue](https://github.com/gardun0/orion/issues) — feature requests and
@@ -74,10 +78,11 @@ control, audio backend, and real-time DSP:
 flowchart TB
     UI["<b>ui</b> (GPUI)<br/>mixer strips · routing matrix · scenes · settings"]
     AE["<b>app_engine</b> — coordinator thread<br/>single writer of the domain"]
-    DOM["<b>domain</b><br/>AudioGraph · typed IDs · invariants"]
-    BE["<b>backend</b> — AudioBackend trait<br/>PipeWireBackend (Linux) · FakeBackend (tests)"]
+    DOM["<b>domain</b><br/>AudioGraph · typed IDs · invariants · backend capabilities"]
+    BE["<b>backend</b> — AudioBackend trait<br/>PipeWireBackend (Linux) · CpalBackend (Windows/macOS) · FakeBackend (tests)"]
+    RT["<b>realtime</b> — destination-driven block engine<br/>source strips · mix buses · drift correction<br/>plan exchange (atomic swap, generation reclaim)"]
     PER["<b>persistence</b><br/>schema v2 · atomic JSON writes · backup"]
-    DSP["<b>orion-dsp</b> — RT-safe planar F32 primitives<br/>gain/mute smoothing · balance · mixing · peak/RMS meters<br/>no allocations, locks, or syscalls on the audio path"]
+    DSP["<b>orion-dsp</b> — RT-safe DSP primitives<br/>smoothing · balance · EQ · saturator · drift · meters<br/>no allocations, locks, or syscalls on the audio path"]
     PW["PipeWire sound server"]
 
     UI -- "commands" --> AE
@@ -85,16 +90,20 @@ flowchart TB
     AE --> DOM
     AE --> BE
     AE --> PER
-    BE --> DSP
+    BE --> RT
+    RT --> DSP
     BE <--> PW
 ```
 
 Execution model: the GPUI thread renders and sends commands; the coordinator
-owns the authoritative `AudioGraph` and compiles render plans; the PipeWire
-thread owns the main loop, registry, streams, and links; the persistence worker
-serializes state with atomic writes and backups. Communication happens over
-bounded channels and pre-allocated rings — never through the real-time audio
-callback.
+owns the authoritative `AudioGraph`; the backend thread owns the PipeWire main
+loop and stream lifecycle; the persistence worker serializes state with atomic
+writes and backups. The real-time engine runs inside the audio callbacks: one
+capture engine per source endpoint and one mix bus per destination, linked by
+pre-allocated rings with adaptive drift correction between device clocks.
+Structural changes travel as immutable plans swapped atomically and reclaimed
+by generation, so the audio path provably never allocates (enforced by a
+counting-allocator test), locks, logs, or syscalls.
 
 ### Project layout
 
@@ -106,7 +115,10 @@ src/
   lib.rs                library: app_engine, backend, domain, persistence
   process_stats.rs      process CPU sampling for the footer readout
   app_engine/           engine coordinator thread, command/event routing
-  backend/              AudioBackend trait, PipeWire backend, fake backend
+  backend/              AudioBackend trait, PipeWire backend, cpal backend
+                        (Windows/macOS), fake backend
+  realtime/             platform-neutral block engine: source/bus engines,
+                        plan exchange, meters (no GPUI/PipeWire dependencies)
   domain/               AudioGraph, typed IDs, controls, events, errors
   persistence/          settings schema, atomic writes with backup, file watch
   state.rs              session model driving the interface
@@ -122,6 +134,7 @@ packaging/
   appimage/             AppImage build script (linuxdeploy)
   aur/                  PKGBUILD template for the orion-bin AUR package
 tests/                  live-PipeWire integration tests (ignored by default)
+                        plus the engine's realtime-contract audit
 schema/                 canonical settings JSON Schema (published for external use)
 ```
 

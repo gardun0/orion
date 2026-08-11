@@ -239,6 +239,11 @@ pub struct SourceStrip {
     pub routes: Vec<bool>,
     pub meter_l: f32,
     pub meter_r: f32,
+    /// RMS level per channel (same 0..1 scale as the peak meters).
+    pub meter_rms_l: f32,
+    pub meter_rms_r: f32,
+    /// Clip LED: lit until this instant after any channel hit full scale.
+    pub clip_until: Option<std::time::Instant>,
     pub online: bool,
 }
 
@@ -246,6 +251,15 @@ pub struct SourceStrip {
 pub enum BusKind {
     Physical,
     Virtual,
+}
+
+impl SourceStrip {
+    /// Clip LED state: true while the hold window from the last clipping
+    /// meter frame is still running.
+    pub fn clip_active(&self) -> bool {
+        self.clip_until
+            .is_some_and(|until| std::time::Instant::now() < until)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -270,7 +284,21 @@ pub struct OutputBus {
     pub mode: ChannelMode,
     pub meter_l: f32,
     pub meter_r: f32,
+    /// RMS level per channel (same 0..1 scale as the peak meters).
+    pub meter_rms_l: f32,
+    pub meter_rms_r: f32,
+    /// Clip LED: lit until this instant after any channel hit full scale.
+    pub clip_until: Option<std::time::Instant>,
     pub online: bool,
+}
+
+impl OutputBus {
+    /// Clip LED state: true while the hold window from the last clipping
+    /// meter frame is still running.
+    pub fn clip_active(&self) -> bool {
+        self.clip_until
+            .is_some_and(|until| std::time::Instant::now() < until)
+    }
 }
 
 pub const MAX_PHYSICAL_INPUT_CHANNELS: usize = 2;
@@ -660,6 +688,9 @@ impl AppState {
             routes: vec![false; self.outputs.len()],
             meter_l: 0.0,
             meter_r: 0.0,
+            meter_rms_l: 0.0,
+            meter_rms_r: 0.0,
+            clip_until: None,
             online: false,
         });
         self.dirty = true;
@@ -684,6 +715,9 @@ impl AppState {
             mode: ChannelMode::Auto,
             meter_l: 0.0,
             meter_r: 0.0,
+            meter_rms_l: 0.0,
+            meter_rms_r: 0.0,
+            clip_until: None,
             online: false,
         });
         for source in &mut self.sources {
@@ -1345,6 +1379,8 @@ impl AppState {
     /// Apply a meter frame; returns whether any visible level changed (the UI
     /// only repaints then, so silence does not churn the render loop).
     pub fn apply_meter(&mut self, frame: MeterFrame) -> bool {
+        /// Clip LEDs hold this long after the last clipping window.
+        const CLIP_HOLD: std::time::Duration = std::time::Duration::from_millis(1_500);
         let mut changed = false;
         let Some(endpoint) = self
             .devices
@@ -1356,21 +1392,59 @@ impl AppState {
         let left = endpoint
             .channels
             .first()
-            .and_then(|channel| frame.levels.get(channel))
-            .map_or(0.0, |level| level.value());
+            .and_then(|channel| frame.levels.get(channel));
         let right = endpoint
             .channels
             .get(1)
-            .and_then(|channel| frame.levels.get(channel))
-            .map_or(left, |level| level.value());
+            .and_then(|channel| frame.levels.get(channel));
+        let (left_peak, left_rms) = left.map_or((0.0, 0.0), |l| (l.peak.value(), l.rms.value()));
+        let (right_peak, right_rms) =
+            right.map_or((left_peak, left_rms), |r| (r.peak.value(), r.rms.value()));
+        let clipped = left.is_some_and(|l| l.clipped) || right.is_some_and(|r| r.clipped);
         for source in &mut self.sources {
             if source.endpoint_id == Some(frame.endpoint_id) {
-                changed |= update_meter_pair(&mut source.meter_l, &mut source.meter_r, left, right);
+                changed |= update_meter_pair(
+                    &mut source.meter_l,
+                    &mut source.meter_r,
+                    left_peak,
+                    right_peak,
+                );
+                changed |= update_meter_pair(
+                    &mut source.meter_rms_l,
+                    &mut source.meter_rms_r,
+                    left_rms,
+                    right_rms,
+                );
+                if clipped {
+                    let until = std::time::Instant::now() + CLIP_HOLD;
+                    if source.clip_until.is_none_or(|current| current < until) {
+                        source.clip_until = Some(until);
+                        changed = true;
+                    }
+                }
             }
         }
         for output in &mut self.outputs {
             if output.endpoint_id == Some(frame.endpoint_id) {
-                changed |= update_meter_pair(&mut output.meter_l, &mut output.meter_r, left, right);
+                changed |= update_meter_pair(
+                    &mut output.meter_l,
+                    &mut output.meter_r,
+                    left_peak,
+                    right_peak,
+                );
+                changed |= update_meter_pair(
+                    &mut output.meter_rms_l,
+                    &mut output.meter_rms_r,
+                    left_rms,
+                    right_rms,
+                );
+                if clipped {
+                    let until = std::time::Instant::now() + CLIP_HOLD;
+                    if output.clip_until.is_none_or(|current| current < until) {
+                        output.clip_until = Some(until);
+                        changed = true;
+                    }
+                }
             }
         }
         changed
@@ -1512,6 +1586,9 @@ fn default_source_template(route_count: usize) -> Vec<SourceStrip> {
             routes: vec![false; route_count],
             meter_l: 0.0,
             meter_r: 0.0,
+            meter_rms_l: 0.0,
+            meter_rms_r: 0.0,
+            clip_until: None,
             online: false,
         },
         SourceStrip {
@@ -1530,6 +1607,9 @@ fn default_source_template(route_count: usize) -> Vec<SourceStrip> {
             routes: vec![false; route_count],
             meter_l: 0.0,
             meter_r: 0.0,
+            meter_rms_l: 0.0,
+            meter_rms_r: 0.0,
+            clip_until: None,
             online: false,
         },
         SourceStrip {
@@ -1548,6 +1628,9 @@ fn default_source_template(route_count: usize) -> Vec<SourceStrip> {
             routes: vec![false; route_count],
             meter_l: 0.0,
             meter_r: 0.0,
+            meter_rms_l: 0.0,
+            meter_rms_r: 0.0,
+            clip_until: None,
             online: false,
         },
     ]
@@ -1571,6 +1654,9 @@ fn default_output_template() -> Vec<OutputBus> {
             mode: ChannelMode::Auto,
             meter_l: 0.0,
             meter_r: 0.0,
+            meter_rms_l: 0.0,
+            meter_rms_r: 0.0,
+            clip_until: None,
             online: false,
         },
         OutputBus {
@@ -1589,6 +1675,9 @@ fn default_output_template() -> Vec<OutputBus> {
             mode: ChannelMode::Auto,
             meter_l: 0.0,
             meter_r: 0.0,
+            meter_rms_l: 0.0,
+            meter_rms_r: 0.0,
+            clip_until: None,
             online: false,
         },
     ]
@@ -1749,7 +1838,9 @@ fn update_meter_pair(meter_l: &mut f32, meter_r: &mut f32, left: f32, right: f32
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orion::domain::{ChannelId, EndpointIdentity, GainDb, MeterLevel, NormalizedBalance};
+    use orion::domain::{
+        ChannelId, ChannelLevels, EndpointIdentity, GainDb, MeterLevel, NormalizedBalance,
+    };
 
     fn endpoint(endpoint_type: EndpointType) -> AudioEndpoint {
         AudioEndpoint {
@@ -2277,15 +2368,14 @@ mod tests {
         let source = endpoint(EndpointType::PhysicalInput);
         let mut state = AppState::new(Vec::new());
         state.set_devices(vec![source.clone()]);
+        let channel_levels = |peak: f32, rms: f32, clipped: bool| ChannelLevels {
+            peak: MeterLevel::new(peak).unwrap_or_default(),
+            rms: MeterLevel::new(rms).unwrap_or_default(),
+            clipped,
+        };
         let levels = HashMap::from([
-            (
-                source.channels[0],
-                MeterLevel::new(0.25).unwrap_or_default(),
-            ),
-            (
-                source.channels[1],
-                MeterLevel::new(0.75).unwrap_or_default(),
-            ),
+            (source.channels[0], channel_levels(0.25, 0.1, false)),
+            (source.channels[1], channel_levels(0.75, 0.5, true)),
         ]);
 
         state.apply_meter(MeterFrame {
@@ -2296,6 +2386,12 @@ mod tests {
 
         assert_eq!(state.sources[0].meter_l, 0.25);
         assert_eq!(state.sources[0].meter_r, 0.75);
+        assert_eq!(state.sources[0].meter_rms_l, 0.1);
+        assert_eq!(state.sources[0].meter_rms_r, 0.5);
+        assert!(
+            state.sources[0].clip_active(),
+            "a clipping channel lights the strip LED"
+        );
     }
 
     #[test]
@@ -2303,15 +2399,14 @@ mod tests {
         let destination = endpoint(EndpointType::PhysicalOutput);
         let mut state = AppState::new(Vec::new());
         state.set_devices(vec![destination.clone()]);
+        let channel_levels = |peak: f32, rms: f32| ChannelLevels {
+            peak: MeterLevel::new(peak).unwrap_or_default(),
+            rms: MeterLevel::new(rms).unwrap_or_default(),
+            clipped: false,
+        };
         let levels = HashMap::from([
-            (
-                destination.channels[0],
-                MeterLevel::new(0.4).unwrap_or_default(),
-            ),
-            (
-                destination.channels[1],
-                MeterLevel::new(0.6).unwrap_or_default(),
-            ),
+            (destination.channels[0], channel_levels(0.4, 0.2)),
+            (destination.channels[1], channel_levels(0.6, 0.3)),
         ]);
 
         state.apply_meter(MeterFrame {
@@ -2322,6 +2417,8 @@ mod tests {
 
         assert_eq!(state.outputs[0].meter_l, 0.4);
         assert_eq!(state.outputs[0].meter_r, 0.6);
+        assert_eq!(state.outputs[0].meter_rms_r, 0.3);
+        assert!(!state.outputs[0].clip_active());
     }
 
     #[test]

@@ -267,6 +267,9 @@ pub(crate) fn apply_document(
                 routes: vec![false; state.outputs.len()],
                 meter_l: 0.0,
                 meter_r: 0.0,
+                meter_rms_l: 0.0,
+                meter_rms_r: 0.0,
+                clip_until: None,
                 online: false,
             })
             .collect();
@@ -299,6 +302,9 @@ pub(crate) fn apply_document(
                 mode: channel.mode,
                 meter_l: 0.0,
                 meter_r: 0.0,
+                meter_rms_l: 0.0,
+                meter_rms_r: 0.0,
+                clip_until: None,
                 online: false,
             })
             .collect();

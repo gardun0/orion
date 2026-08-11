@@ -1,6 +1,12 @@
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use super::{ChannelId, DeviceId, EndpointId, GainDb, NormalizedBalance, VirtualDeviceId};
+
+/// Namespace for all derived stable IDs. Both platform backends derive
+/// endpoint identities with these helpers so a persisted route survives
+/// restarts and hot-plug regardless of the OS audio stack.
+const ORION_ID_NAMESPACE: Uuid = Uuid::from_u128(0x56ef_da46_0a0a_4f64_a31e_3f76_74fc_b476);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EndpointIdentity {
@@ -91,4 +97,40 @@ pub struct AudioEndpoint {
     pub gain: GainDb,
     pub muted: bool,
     pub balance: NormalizedBalance,
+}
+
+/// Stable endpoint identity derived from its identity fingerprint and
+/// direction. The key format is frozen: persisted sessions and channel IDs
+/// depend on it.
+pub fn stable_endpoint_id(identity: &EndpointIdentity, endpoint_type: EndpointType) -> EndpointId {
+    let key = format!(
+        "{:?}|{}|{}|{}|{}|{}|{}|{}",
+        endpoint_type,
+        identity.serial.as_deref().unwrap_or(""),
+        identity.bus.as_deref().unwrap_or(""),
+        identity.vendor.as_deref().unwrap_or(""),
+        identity.product.as_deref().unwrap_or(""),
+        identity.device_name.as_deref().unwrap_or(""),
+        identity.node_name.as_deref().unwrap_or(""),
+        identity.profile.as_deref().unwrap_or("")
+    );
+    EndpointId::from_uuid(Uuid::new_v5(&ORION_ID_NAMESPACE, key.as_bytes()))
+}
+
+pub fn stable_device_id(identity: &EndpointIdentity) -> Option<DeviceId> {
+    let key = identity
+        .serial
+        .as_deref()
+        .or(identity.device_name.as_deref())?;
+    Some(DeviceId::from_uuid(Uuid::new_v5(
+        &ORION_ID_NAMESPACE,
+        format!("device|{key}").as_bytes(),
+    )))
+}
+
+pub fn stable_channel_id(endpoint_id: EndpointId, index: u32) -> ChannelId {
+    ChannelId::from_uuid(Uuid::new_v5(
+        &ORION_ID_NAMESPACE,
+        format!("channel|{endpoint_id}|{index}").as_bytes(),
+    ))
 }

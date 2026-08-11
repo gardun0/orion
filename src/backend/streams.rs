@@ -19,14 +19,13 @@ use std::{
 };
 
 use pipewire::{self as pw, spa::pod::Pod};
-use rtrb::PushError;
 
 use crate::domain::{
     AudioEndpoint, AudioError, EndpointId, EndpointType, ErrorCode, ErrorSeverity,
 };
 use crate::realtime::{
-    BusEngine, BusHandle, BusInbox, ControlHub, RouteMeter, SourceEngine, SourceHandle,
-    SourceInbox, MAX_BLOCK_FRAMES,
+    BusEngine, BusInbox, BusPublisher, ControlHub, RouteMeter, SourceEngine, SourceInbox,
+    SourcePublisher, MAX_BLOCK_FRAMES,
 };
 
 const SAMPLE_BYTES: usize = mem::size_of::<f32>();
@@ -123,10 +122,7 @@ pub struct CaptureRuntime<'core> {
     endpoint_id: EndpointId,
     meter: Arc<RouteMeter>,
     health: StreamHealth,
-    handle: SourceHandle,
-    plan_generation: u64,
-    /// Backend-side copy of the plan: (route, bus layout) pairs.
-    feeds: Vec<(crate::domain::RouteId, usize)>,
+    publisher: SourcePublisher,
     _listener: pw::stream::StreamListener<CaptureData>,
     stream: pw::stream::StreamBox<'core>,
 }
@@ -137,9 +133,7 @@ pub struct PlaybackRuntime<'core> {
     channels: usize,
     meter: Arc<RouteMeter>,
     health: StreamHealth,
-    handle: BusHandle,
-    plan_generation: u64,
-    routes: Vec<crate::domain::RouteId>,
+    publisher: BusPublisher,
     _listener: pw::stream::StreamListener<PlaybackData>,
     stream: pw::stream::StreamBox<'core>,
 }
@@ -241,9 +235,7 @@ impl<'core> CaptureRuntime<'core> {
             endpoint_id: endpoint.id,
             meter,
             health,
-            handle,
-            plan_generation: 0,
-            feeds: Vec::new(),
+            publisher: SourcePublisher::new(handle),
             _listener: listener,
             stream,
         })
@@ -278,53 +270,34 @@ impl<'core> CaptureRuntime<'core> {
         bus_channels: usize,
         item: SourceInbox,
     ) -> Result<(), AudioError> {
-        self.feeds.push((route_id, bus_channels));
-        self.publish_source_plan()?;
-        self.handle.inbox.push(item).map_err(|PushError::Full(_)| {
-            stream_error(
-                "Orion could not update that connection.",
-                format!("capture inbox full for endpoint {}", self.endpoint_id),
-            )
-        })?;
-        Ok(())
+        self.publisher
+            .add_feed(route_id, bus_channels, item)
+            .map_err(|rtrb::PushError::Full(_)| {
+                stream_error(
+                    "Orion could not update that connection.",
+                    format!("capture inbox full for endpoint {}", self.endpoint_id),
+                )
+            })
     }
 
     pub fn remove_feed(&mut self, route_id: crate::domain::RouteId) -> Result<(), AudioError> {
-        self.feeds.retain(|(id, _)| *id != route_id);
-        self.publish_source_plan()
+        self.publisher.remove_feed(route_id);
+        Ok(())
     }
 
     pub fn has_routes(&self) -> bool {
-        !self.feeds.is_empty()
-    }
-
-    fn publish_source_plan(&mut self) -> Result<(), AudioError> {
-        self.plan_generation += 1;
-        let old = self.handle.plan_slot.publish(crate::realtime::SourcePlan {
-            generation: self.plan_generation,
-            feeds: self
-                .feeds
-                .iter()
-                .map(|(route_id, bus_channels)| crate::realtime::RouteFeed {
-                    route_id: *route_id,
-                    bus_channels: *bus_channels,
-                })
-                .collect(),
-        });
-        self.handle.reclaimer.retire(old);
-        Ok(())
+        self.publisher.has_routes()
     }
 
     /// Next plan generation (tags the inbox delivery for this route).
     pub fn next_generation(&self) -> u64 {
-        self.plan_generation + 1
+        self.publisher.next_generation()
     }
 
     /// Drain retired ring halves and reclaim plans the callback finished
     /// with; drops happen here, on the backend thread.
     pub fn collect_garbage(&mut self) {
-        while self.handle.retired.pop().is_ok() {}
-        self.handle.reclaimer.collect(&self.handle.plan_slot);
+        self.publisher.collect_garbage();
     }
 
     pub fn disconnect(&self) -> Result<(), AudioError> {
@@ -419,9 +392,7 @@ impl<'core> PlaybackRuntime<'core> {
             channels,
             meter,
             health,
-            handle,
-            plan_generation: 0,
-            routes: Vec::new(),
+            publisher: BusPublisher::new(handle),
             _listener: listener,
             stream,
         })
@@ -456,43 +427,31 @@ impl<'core> PlaybackRuntime<'core> {
         route_id: crate::domain::RouteId,
         item: BusInbox,
     ) -> Result<(), AudioError> {
-        self.routes.push(route_id);
-        self.publish_bus_plan()?;
-        self.handle.inbox.push(item).map_err(|PushError::Full(_)| {
-            stream_error(
-                "Orion could not update that connection.",
-                format!("playback inbox full for endpoint {}", self.endpoint_id),
-            )
-        })?;
-        Ok(())
+        self.publisher
+            .add_draw(route_id, item)
+            .map_err(|rtrb::PushError::Full(_)| {
+                stream_error(
+                    "Orion could not update that connection.",
+                    format!("playback inbox full for endpoint {}", self.endpoint_id),
+                )
+            })
     }
 
     pub fn remove_draw(&mut self, route_id: crate::domain::RouteId) -> Result<(), AudioError> {
-        self.routes.retain(|id| *id != route_id);
-        self.publish_bus_plan()
-    }
-
-    pub fn has_routes(&self) -> bool {
-        !self.routes.is_empty()
-    }
-
-    fn publish_bus_plan(&mut self) -> Result<(), AudioError> {
-        self.plan_generation += 1;
-        let old = self.handle.plan_slot.publish(crate::realtime::BusPlan {
-            generation: self.plan_generation,
-            routes: self.routes.clone(),
-        });
-        self.handle.reclaimer.retire(old);
+        self.publisher.remove_draw(route_id);
         Ok(())
     }
 
+    pub fn has_routes(&self) -> bool {
+        self.publisher.has_routes()
+    }
+
     pub fn next_generation(&self) -> u64 {
-        self.plan_generation + 1
+        self.publisher.next_generation()
     }
 
     pub fn collect_garbage(&mut self) {
-        while self.handle.retired.pop().is_ok() {}
-        self.handle.reclaimer.collect(&self.handle.plan_slot);
+        self.publisher.collect_garbage();
     }
 
     pub fn disconnect(&self) -> Result<(), AudioError> {

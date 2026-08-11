@@ -535,6 +535,55 @@ fn drift_corrector_converges_under_simulated_clock_drift() {
     );
 }
 
+// ---- Dynamics ----
+
+#[test]
+fn soft_clip_is_identity_below_the_knee() {
+    for value in [0.0, 0.25, -0.5, SOFT_CLIP_KNEE, -SOFT_CLIP_KNEE] {
+        assert_eq!(soft_clip(value), value, "{value} must pass untouched");
+    }
+}
+
+#[test]
+fn soft_clip_is_bounded_continuous_and_symmetric() {
+    // Bounded: even absurd input stays within ±1.0.
+    for value in [1.0, 1.5, 3.0, 100.0, f32::MAX] {
+        let clipped = soft_clip(value);
+        assert!((0.0..=1.0).contains(&clipped), "{value} -> {clipped}");
+        assert_eq!(soft_clip(-value), -clipped, "symmetric at {value}");
+    }
+    // Continuous at the knee: the limit from below meets the bend.
+    let epsilon = 1.0e-6;
+    let below = soft_clip(SOFT_CLIP_KNEE - epsilon);
+    let above = soft_clip(SOFT_CLIP_KNEE + epsilon);
+    assert!(
+        (above - below).abs() < 1.0e-4,
+        "no step at the knee: {below} vs {above}"
+    );
+    // Monotonic through the transition region: louder in, louder out.
+    let mut previous = soft_clip(SOFT_CLIP_KNEE);
+    for value in [1.0, 1.1, 1.25, 1.5] {
+        let clipped = soft_clip(value);
+        assert!(clipped > previous, "strictly rising at {value}");
+        previous = clipped;
+    }
+    // Deep in the rails the tanh saturates to f32-exact 1.0: never folds
+    // back, never exceeds the bound.
+    for value in [2.0, 4.0, 16.0, 1.0e30] {
+        let clipped = soft_clip(value);
+        assert!(clipped >= previous, "never folds back at {value}");
+        assert!(clipped <= 1.0);
+        previous = clipped;
+    }
+}
+
+#[test]
+fn soft_clip_sanitizes_non_finite_input() {
+    assert_eq!(soft_clip(f32::NAN), 0.0);
+    assert_eq!(soft_clip(f32::INFINITY), 0.0);
+    assert_eq!(soft_clip(f32::NEG_INFINITY), 0.0);
+}
+
 #[test]
 fn dasp_sample_frame_and_signal_are_available() {
     fn takes_sample<T: Sample>(_sample: T) {}

@@ -1,5 +1,6 @@
 mod buffer;
 mod drift;
+mod dynamics;
 mod eq;
 mod error;
 mod meter;
@@ -9,6 +10,7 @@ mod processors;
 pub use buffer::{AudioBuffer, ProcessConfig, ProcessContext, MAX_CHANNELS};
 pub use dasp::{Frame, Sample, Signal};
 pub use drift::DriftCorrector;
+pub use dynamics::{soft_clip, SOFT_CLIP_KNEE};
 pub use eq::{Biquad, ChannelEq, EqCoefficients, EQ_MAX_DB, EQ_MIN_DB};
 pub use error::DspError;
 pub use meter::ChannelMeter;

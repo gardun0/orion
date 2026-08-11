@@ -11,9 +11,12 @@ mod route;
 pub use capability::BackendCapabilities;
 pub use command::{EngineCommand, EngineCommandKind};
 pub use controls::{ChannelMode, GainDb, MeterLevel, NormalizedBalance};
-pub use endpoint::{AudioEndpoint, EndpointIdentity, EndpointState, EndpointType};
+pub use endpoint::{
+    stable_channel_id, stable_device_id, stable_endpoint_id, AudioEndpoint, EndpointIdentity,
+    EndpointState, EndpointType,
+};
 pub use error::{AudioError, ErrorCode, ErrorSeverity};
-pub use event::{EngineEvent, EngineStatus, GraphDelta, MeterFrame};
+pub use event::{ChannelLevels, EngineEvent, EngineStatus, GraphDelta, MeterFrame};
 pub use graph::AudioGraph;
 pub use ids::{ChannelId, CommandId, DeviceId, EndpointId, RouteId, VirtualDeviceId};
 pub use route::{AudioRoute, RouteState};

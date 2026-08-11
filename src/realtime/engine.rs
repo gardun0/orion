@@ -24,9 +24,9 @@ use crate::domain::{ChannelMode, RouteId};
 use crate::realtime::controls::{ChannelControls, EndpointControls};
 use crate::realtime::meter::RouteMeter;
 use crate::realtime::stage::{
-    apply_output_mode, apply_sync_offset, capture_mode_frame, channel_gain, control_ramp_frames,
-    corrector_target_frames, delay_line_capacity, refresh_eq, ring_capacity_frames, sanitize,
-    MAX_BLOCK_FRAMES,
+    apply_output_mode, apply_output_mode_crossfade, apply_sync_offset, capture_mode_frame,
+    channel_gain, control_ramp_frames, corrector_target_frames, delay_line_capacity, refresh_eq,
+    ring_capacity_frames, sanitize, MAX_BLOCK_FRAMES,
 };
 
 /// Largest number of routes feeding or reading one endpoint. Callback-side
@@ -254,6 +254,10 @@ struct ActiveFeed {
     producer: Producer<f32>,
     balance_left: ParameterSmoother,
     balance_right: ParameterSmoother,
+    /// Channel mode this feed currently maps with, plus an in-flight blend
+    /// from the previous mode when the control changes (click-free switch).
+    active_mode: ChannelMode,
+    mode_fade: Option<(ChannelMode, ParameterSmoother)>,
 }
 
 struct PendingFeed {
@@ -271,6 +275,84 @@ pub struct SourceHandle {
     pub retired: Consumer<RetiredProducer>,
     pub plan_slot: Arc<PlanSlot<SourcePlan>>,
     pub reclaimer: PlanReclaimer<SourcePlan>,
+}
+
+/// Backend-side plan management for one source endpoint, shared by all
+/// platform adapters: tracks the published feed list and generations, keeps
+/// plan-before-inbox ordering, and reclaims retired plans only after the
+/// callback has completed them.
+pub struct SourcePublisher {
+    handle: SourceHandle,
+    generation: u64,
+    feeds: Vec<(RouteId, usize)>,
+}
+
+impl SourcePublisher {
+    pub fn new(handle: SourceHandle) -> Self {
+        Self {
+            handle,
+            generation: 0,
+            feeds: Vec::new(),
+        }
+    }
+
+    pub fn has_routes(&self) -> bool {
+        !self.feeds.is_empty()
+    }
+
+    /// Generation the next published plan will carry (tags inbox deliveries).
+    pub fn next_generation(&self) -> u64 {
+        self.generation + 1
+    }
+
+    /// Publish a plan listing `route_id`, then deliver the ring half. On an
+    /// inbox overflow the plan rolls back so the callback never waits for a
+    /// half that will not arrive.
+    pub fn add_feed(
+        &mut self,
+        route_id: RouteId,
+        bus_channels: usize,
+        item: SourceInbox,
+    ) -> Result<(), rtrb::PushError<SourceInbox>> {
+        self.feeds.push((route_id, bus_channels));
+        self.publish();
+        match self.handle.inbox.push(item) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.feeds.retain(|(id, _)| *id != route_id);
+                self.publish();
+                Err(error)
+            }
+        }
+    }
+
+    pub fn remove_feed(&mut self, route_id: RouteId) {
+        self.feeds.retain(|(id, _)| *id != route_id);
+        self.publish();
+    }
+
+    /// Drain retired ring halves and reclaim plans the callback finished
+    /// with; drops happen here, on the backend thread.
+    pub fn collect_garbage(&mut self) {
+        while self.handle.retired.pop().is_ok() {}
+        self.handle.reclaimer.collect(&self.handle.plan_slot);
+    }
+
+    fn publish(&mut self) {
+        self.generation += 1;
+        let old = self.handle.plan_slot.publish(SourcePlan {
+            generation: self.generation,
+            feeds: self
+                .feeds
+                .iter()
+                .map(|(route_id, bus_channels)| RouteFeed {
+                    route_id: *route_id,
+                    bus_channels: *bus_channels,
+                })
+                .collect(),
+        });
+        self.handle.reclaimer.retire(old);
+    }
 }
 
 /// Capture-side engine for one source endpoint: meter the raw input with
@@ -296,6 +378,9 @@ pub struct SourceEngine {
     inbox: Consumer<SourceInbox>,
     outbox: Producer<RetiredProducer>,
     plan: Arc<PlanSlot<SourcePlan>>,
+    /// Channel mode currently reported by the endpoint control; compared
+    /// per block to start feed crossfades.
+    active_mode: ChannelMode,
 }
 
 impl SourceEngine {
@@ -313,6 +398,7 @@ impl SourceEngine {
         }
         let (inbox_tx, inbox_rx) = RingBuffer::new(INBOX_CAPACITY);
         let (outbox_tx, outbox_rx) = RingBuffer::new(OUTBOX_CAPACITY);
+        let active_mode = ChannelMode::from_code(channel_controls.mode.load(Ordering::Relaxed));
         let engine = Self {
             channels,
             ramp_frames: control_ramp_frames(rate),
@@ -332,6 +418,7 @@ impl SourceEngine {
             inbox: inbox_rx,
             outbox: outbox_tx,
             plan: plan_slot.clone(),
+            active_mode,
         };
         let handle = SourceHandle {
             inbox: inbox_tx,
@@ -353,7 +440,20 @@ impl SourceEngine {
         self.refresh_targets();
 
         let channels = self.channels;
-        let mode = ChannelMode::from_code(self.channel_controls.mode.load(Ordering::Relaxed));
+        let reported_mode =
+            ChannelMode::from_code(self.channel_controls.mode.load(Ordering::Relaxed));
+        if reported_mode != self.active_mode {
+            // Click-free mode switch: every feed blends old -> new mapping
+            // over one control ramp instead of hard-switching at a frame.
+            let previous = self.active_mode;
+            self.active_mode = reported_mode;
+            for feed in self.feeds.iter_mut() {
+                let mut mix = ParameterSmoother::new(0.0).expect("zero is finite");
+                let _ = mix.set_target(1.0, self.ramp_frames);
+                feed.mode_fade = Some((previous, mix));
+                feed.active_mode = reported_mode;
+            }
+        }
         let offset_samples = (self.channel_controls.delay_frames.load(Ordering::Relaxed) as usize)
             .saturating_mul(channels)
             .min(self.delay_line.len().saturating_sub(1));
@@ -373,14 +473,27 @@ impl SourceEngine {
                 *sample = sanitize(*sample);
             }
             // Meter the source's own level with the instantaneous controls:
-            // the meter tracks the fader, not the audio ramp.
+            // the meter tracks the fader, not the audio ramp. Peak per
+            // sample; RMS and clip merged once per block.
+            let mut sum_squares = [0.0_f64; orion_dsp::MAX_CHANNELS];
+            let mut clipped = [false; orion_dsp::MAX_CHANNELS];
             for frame in 0..frames {
                 for channel in 0..channels {
                     let sample = scratch[frame * channels + channel]
                         * meter_gain
                         * channel_gain(channel, meter_left, meter_right);
                     self.meter.observe(channel, sample);
+                    sum_squares[channel] += f64::from(sample) * f64::from(sample);
+                    clipped[channel] |= sample.abs() >= 1.0;
                 }
+            }
+            for channel in 0..channels {
+                self.meter.merge_block_stats(
+                    channel,
+                    sum_squares[channel],
+                    frames as u64,
+                    clipped[channel],
+                );
             }
             // Gain and mute as cascaded ramps (click-free by construction).
             for frame in 0..frames {
@@ -408,9 +521,11 @@ impl SourceEngine {
                 }
             }
             // Fan out: map into each bus's layout with the source's channel
-            // mode, then apply the source balance in the bus layout.
+            // mode (blending across a mode switch), then apply the source
+            // balance in the bus layout.
             for feed in self.feeds.iter_mut() {
                 let bus_channels = feed.bus_channels;
+                let active_mode = feed.active_mode;
                 for frame in 0..frames {
                     if feed.producer.slots() < bus_channels {
                         break;
@@ -418,12 +533,48 @@ impl SourceEngine {
                     let left = feed.balance_left.next_value();
                     let right = feed.balance_right.next_value();
                     let source_frame = &scratch[frame * channels..(frame + 1) * channels];
+                    // During a crossfade both mappings are computed and
+                    // blended; otherwise the fast path is a single mapping.
+                    let fade = feed
+                        .mode_fade
+                        .as_mut()
+                        .map(|(previous, mix)| (*previous, mix.next_value()));
                     for bus_channel in 0..bus_channels {
-                        let sample =
-                            capture_mode_frame(mode, source_frame, bus_channel, bus_channels)
-                                * channel_gain(bus_channel, left, right);
-                        let _ = feed.producer.push(sample);
+                        let mapped = match fade {
+                            Some((previous, t)) => {
+                                let old = capture_mode_frame(
+                                    previous,
+                                    source_frame,
+                                    bus_channel,
+                                    bus_channels,
+                                );
+                                let new = capture_mode_frame(
+                                    active_mode,
+                                    source_frame,
+                                    bus_channel,
+                                    bus_channels,
+                                );
+                                old + (new - old) * t
+                            }
+                            None => capture_mode_frame(
+                                active_mode,
+                                source_frame,
+                                bus_channel,
+                                bus_channels,
+                            ),
+                        };
+                        let _ = feed
+                            .producer
+                            .push(mapped * channel_gain(bus_channel, left, right));
                     }
+                }
+                // Retire a completed fade so the fast path resumes.
+                if feed
+                    .mode_fade
+                    .as_ref()
+                    .is_some_and(|(_, mix)| !mix.is_smoothing())
+                {
+                    feed.mode_fade = None;
                 }
             }
         }
@@ -512,6 +663,10 @@ impl SourceEngine {
                 producer: pending.producer,
                 balance_left: pending.balance_left,
                 balance_right: pending.balance_right,
+                // A newly linked route starts in the current mode; it never
+                // fades in from a stale one.
+                active_mode: self.active_mode,
+                mode_fade: None,
             });
         } else {
             self.retire_producer(pending.route_id, pending.producer);
@@ -581,6 +736,71 @@ pub struct BusHandle {
     pub reclaimer: PlanReclaimer<BusPlan>,
 }
 
+/// Backend-side plan management for one destination endpoint (the bus),
+/// shared by all platform adapters. Same contract as [`SourcePublisher`].
+pub struct BusPublisher {
+    handle: BusHandle,
+    generation: u64,
+    routes: Vec<RouteId>,
+}
+
+impl BusPublisher {
+    pub fn new(handle: BusHandle) -> Self {
+        Self {
+            handle,
+            generation: 0,
+            routes: Vec::new(),
+        }
+    }
+
+    pub fn has_routes(&self) -> bool {
+        !self.routes.is_empty()
+    }
+
+    pub fn next_generation(&self) -> u64 {
+        self.generation + 1
+    }
+
+    /// The Err payload returns the undeliverable ring half to the caller —
+    /// its size is the point.
+    #[allow(clippy::result_large_err)]
+    pub fn add_draw(
+        &mut self,
+        route_id: RouteId,
+        item: BusInbox,
+    ) -> Result<(), rtrb::PushError<BusInbox>> {
+        self.routes.push(route_id);
+        self.publish();
+        match self.handle.inbox.push(item) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.routes.retain(|id| *id != route_id);
+                self.publish();
+                Err(error)
+            }
+        }
+    }
+
+    pub fn remove_draw(&mut self, route_id: RouteId) {
+        self.routes.retain(|id| *id != route_id);
+        self.publish();
+    }
+
+    pub fn collect_garbage(&mut self) {
+        while self.handle.retired.pop().is_ok() {}
+        self.handle.reclaimer.collect(&self.handle.plan_slot);
+    }
+
+    fn publish(&mut self) {
+        self.generation += 1;
+        let old = self.handle.plan_slot.publish(BusPlan {
+            generation: self.generation,
+            routes: self.routes.clone(),
+        });
+        self.handle.reclaimer.retire(old);
+    }
+}
+
 /// Playback-side engine for one destination endpoint: pull every routed
 /// source through its drift corrector, sum sample by sample, then apply the
 /// bus strip (balance, gain/mute, sync delay, EQ, output mode) and meter
@@ -606,6 +826,10 @@ pub struct BusEngine {
     inbox: Consumer<BusInbox>,
     outbox: Producer<RetiredConsumer>,
     plan: Arc<PlanSlot<BusPlan>>,
+    /// Channel mode currently applied to the output, plus an in-flight blend
+    /// from the previous mode when the control changes (click-free switch).
+    active_mode: ChannelMode,
+    mode_fade: Option<(ChannelMode, ParameterSmoother)>,
 }
 
 impl BusEngine {
@@ -624,6 +848,7 @@ impl BusEngine {
         let (inbox_tx, inbox_rx) = RingBuffer::new(INBOX_CAPACITY);
         let (outbox_tx, outbox_rx) = RingBuffer::new(OUTBOX_CAPACITY);
         let (balance_left, balance_right) = controls.balance_gains();
+        let active_mode = ChannelMode::from_code(channel_controls.mode.load(Ordering::Relaxed));
         let engine = Self {
             channels,
             ramp_frames: control_ramp_frames(rate),
@@ -645,6 +870,8 @@ impl BusEngine {
             inbox: inbox_rx,
             outbox: outbox_tx,
             plan: plan_slot.clone(),
+            active_mode,
+            mode_fade: None,
         };
         let handle = BusHandle {
             inbox: inbox_tx,
@@ -666,7 +893,17 @@ impl BusEngine {
         self.refresh_targets();
 
         let channels = self.channels;
-        let mode = ChannelMode::from_code(self.channel_controls.mode.load(Ordering::Relaxed));
+        let reported_mode =
+            ChannelMode::from_code(self.channel_controls.mode.load(Ordering::Relaxed));
+        if reported_mode != self.active_mode {
+            // Mode reshaping only exists for stereo buses; start the blend.
+            if channels == 2 {
+                let mut mix = ParameterSmoother::new(0.0).expect("zero is finite");
+                let _ = mix.set_target(1.0, self.ramp_frames);
+                self.mode_fade = Some((self.active_mode, mix));
+            }
+            self.active_mode = reported_mode;
+        }
         let offset_samples = (self.channel_controls.delay_frames.load(Ordering::Relaxed) as usize)
             .saturating_mul(channels)
             .min(self.delay_line.len().saturating_sub(1));
@@ -727,16 +964,44 @@ impl BusEngine {
                     self.accumulator[index] = eq.process(self.accumulator[index]);
                 }
             }
-            // Sanitize after the EQ so a blown-up filter can never put
-            // NaN/Inf on the wire; the meter hears what actually plays.
+            // The always-on saturator bounds the summed bus at ±1.0
+            // (identity below -1 dBFS) — this is the post-sum protection
+            // point, so it sees the mixed signal, not individual routes.
+            // It also maps non-finite values to silence. The meter hears
+            // what actually plays, but clipping is detected *before* the
+            // saturator so driving the bus stays visible.
+            let mut sum_squares = [0.0_f64; orion_dsp::MAX_CHANNELS];
+            let mut clipped = [false; orion_dsp::MAX_CHANNELS];
             for frame in 0..frames {
                 for channel in 0..channels {
-                    let sample = sanitize(self.accumulator[frame * channels + channel]);
+                    let raw = self.accumulator[frame * channels + channel];
+                    clipped[channel] |= raw.abs() >= 1.0;
+                    let sample = orion_dsp::soft_clip(raw);
                     self.meter.observe(channel, sample);
+                    sum_squares[channel] += f64::from(sample) * f64::from(sample);
                     chunk[frame * channels + channel] = sample;
                 }
             }
-            apply_output_mode(mode, chunk, channels);
+            for channel in 0..channels {
+                self.meter.merge_block_stats(
+                    channel,
+                    sum_squares[channel],
+                    frames as u64,
+                    clipped[channel],
+                );
+            }
+            // Output channel mode: blend old -> new across a switch so the
+            // reshape never clicks; retire the fade once the ramp lands.
+            let mut fade_finished = false;
+            if let Some((previous, mix)) = &mut self.mode_fade {
+                apply_output_mode_crossfade(*previous, self.active_mode, mix, chunk);
+                fade_finished = !mix.is_smoothing();
+            } else {
+                apply_output_mode(self.active_mode, chunk, channels);
+            }
+            if fade_finished {
+                self.mode_fade = None;
+            }
         }
 
         drop(plan);

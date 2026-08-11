@@ -400,7 +400,7 @@ fn assert_meter_tracks_tone(
     while Instant::now() < deadline && !heard {
         match handle.recv_timeout(Duration::from_millis(100)) {
             Ok(Some(EngineEvent::Meter { frame })) if frame.endpoint_id == source => {
-                heard = frame.levels.values().any(|level| level.value() > 0.01);
+                heard = frame.levels.values().any(|level| level.peak.value() > 0.01);
             }
             Ok(Some(_)) | Ok(None) => {}
             Err(error) => panic!("PipeWire backend event channel failed: {error}"),
@@ -1100,7 +1100,7 @@ fn collect_meter_level(
         match handle.recv_timeout(Duration::from_millis(100)) {
             Ok(Some(EngineEvent::Meter { frame })) if frame.endpoint_id == endpoint_id => {
                 for level in frame.levels.values() {
-                    peak = peak.max(f32::from(*level));
+                    peak = peak.max(f32::from(level.peak));
                 }
             }
             Ok(Some(_)) | Ok(None) => {}

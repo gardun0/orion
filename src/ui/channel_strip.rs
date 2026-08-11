@@ -151,7 +151,14 @@ impl RootView {
                     .items_center()
                     .justify_center()
                     .bg(rgb(BASE_RAISED))
-                    .child(render_meter(source.meter_l, source.meter_r, muted)),
+                    .child(render_meter(
+                        source.meter_l,
+                        source.meter_r,
+                        source.meter_rms_l,
+                        source.meter_rms_r,
+                        source.clip_active(),
+                        muted,
+                    )),
             )
             .child(render_knob_section(
                 FaderTarget::Source(index),
@@ -437,7 +444,14 @@ impl RootView {
                     .items_center()
                     .justify_center()
                     .bg(rgb(BASE_RAISED))
-                    .child(render_meter(output.meter_l, output.meter_r, muted)),
+                    .child(render_meter(
+                        output.meter_l,
+                        output.meter_r,
+                        output.meter_rms_l,
+                        output.meter_rms_r,
+                        output.clip_active(),
+                        muted,
+                    )),
             )
             .child(render_knob_section(
                 FaderTarget::Output(index),
@@ -895,9 +909,19 @@ fn paint_knob(
     }
 }
 
-fn render_meter(left: f32, right: f32, muted: bool) -> Div {
-    let left = if muted { 0.0 } else { left };
-    let right = if muted { 0.0 } else { right };
+fn render_meter(
+    left: f32,
+    right: f32,
+    rms_left: f32,
+    rms_right: f32,
+    clip: bool,
+    muted: bool,
+) -> Div {
+    let (left, right, rms_left, rms_right) = if muted {
+        (0.0, 0.0, 0.0, 0.0)
+    } else {
+        (left, right, rms_left, rms_right)
+    };
     // Column width and gap must mirror paint_meter so labels, bars and
     // readouts line up exactly.
     let column = |text: String, color: u32| {
@@ -926,10 +950,10 @@ fn render_meter(left: f32, right: f32, muted: bool) -> Div {
         .child(
             div().flex_1().min_h_0().w_full().pt_1().child(
                 canvas(
-                    move |bounds, _, _| (bounds, left, right),
+                    move |bounds, _, _| (bounds, left, right, rms_left, rms_right, clip),
                     |_, state, window, _| {
-                        let (bounds, left, right) = state;
-                        paint_meter(bounds, left, right, window);
+                        let (bounds, left, right, rms_left, rms_right, clip) = state;
+                        paint_meter(bounds, left, right, rms_left, rms_right, clip, window);
                     },
                 )
                 .size_full(),
@@ -946,18 +970,42 @@ fn render_meter(left: f32, right: f32, muted: bool) -> Div {
 }
 
 /// Elastic segmented L/R meter painted from its real bounds: the segment
-/// count follows the track height.
-fn paint_meter(bounds: Bounds<Pixels>, left: f32, right: f32, window: &mut Window) {
-    let height: f32 = bounds.size.height.into();
+/// count follows the track height. Each bar gets a dim RMS marker line, and
+/// a clip LED strip across the top lights when the signal hit full scale.
+#[allow(clippy::too_many_arguments)]
+fn paint_meter(
+    bounds: Bounds<Pixels>,
+    left: f32,
+    right: f32,
+    rms_left: f32,
+    rms_right: f32,
+    clip_active: bool,
+    window: &mut Window,
+) {
     let origin_x: f32 = bounds.origin.x.into();
     let origin_y: f32 = bounds.origin.y.into();
     let width: f32 = bounds.size.width.into();
+    let led_height = 4.0_f32;
+    let height: f32 = (f32::from(bounds.size.height) - led_height - 3.0).max(8.0);
     let segments = meter_segments_for_height(height);
     let slot = height / segments as f32;
     let bar_w = 30.0_f32.min((width - 8.0) / 2.0);
     let left_x = origin_x + (width - (bar_w * 2.0 + 8.0)) / 2.0;
+    let bars_y = origin_y + led_height + 3.0;
 
-    for (channel_x, level) in [(left_x, left), (left_x + bar_w + 8.0, right)] {
+    // Clip LED: one strip spanning both bars.
+    window.paint_quad(fill(
+        Bounds {
+            origin: point(px(left_x), px(origin_y)),
+            size: size(px(bar_w * 2.0 + 8.0), px(led_height)),
+        },
+        rgb(if clip_active { RED } else { SURFACE_RAISED }),
+    ));
+
+    for (channel_x, level, rms) in [
+        (left_x, left, rms_left),
+        (left_x + bar_w + 8.0, right, rms_right),
+    ] {
         let level_db = amplitude_to_db(level);
         for segment in 0..segments {
             let segment_db = segment_threshold_db(segment, segments);
@@ -969,7 +1017,7 @@ fn paint_meter(bounds: Bounds<Pixels>, left: f32, right: f32, window: &mut Windo
             } else {
                 GREEN
             };
-            let y = origin_y + height - (segment as f32 + 1.0) * slot;
+            let y = bars_y + height - (segment as f32 + 1.0) * slot;
             window.paint_quad(fill(
                 Bounds {
                     origin: point(px(channel_x), px(y + 0.5)),
@@ -978,6 +1026,17 @@ fn paint_meter(bounds: Bounds<Pixels>, left: f32, right: f32, window: &mut Windo
                 rgb(if active { color } else { SURFACE_RAISED }),
             ));
         }
+        // RMS marker: a dim horizontal line at the window's RMS level.
+        let rms_fraction =
+            ((amplitude_to_db(rms) - METER_FLOOR_DB) / -METER_FLOOR_DB).clamp(0.0, 1.0);
+        let rms_y = bars_y + height * (1.0 - rms_fraction);
+        window.paint_quad(fill(
+            Bounds {
+                origin: point(px(channel_x), px(rms_y - 0.5)),
+                size: size(px(bar_w), px(1.5)),
+            },
+            rgb(TEXT_MUTED),
+        ));
     }
 }
 

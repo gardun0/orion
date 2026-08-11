@@ -145,8 +145,8 @@ fn source_to_bus_passes_signal_click_free() {
         "unity route must converge to the source exactly: {tail:?}"
     );
     // Both meters saw the signal.
-    assert!(source_meter.levels().any(|level| level > 0.4));
-    assert!(bus_meter.levels().all(|level| level > 0.4));
+    assert!(source_meter.readings().any(|reading| reading.peak > 0.4));
+    assert!(bus_meter.readings().all(|reading| reading.peak > 0.4));
 }
 
 #[test]
@@ -462,6 +462,140 @@ fn output_mode_post_pass_reshapes_stereo_only() {
 }
 
 #[test]
+fn output_mode_crossfade_blends_between_mappings() {
+    // Left maps to (l, l), Right to (r, r); a 4-frame ramp must hit the
+    // exact linear interpolation points and land precisely on the new mode.
+    let mut mix = orion_dsp::ParameterSmoother::new(0.0).expect("finite");
+    mix.set_target(1.0, 4).expect("ramp");
+    let mut block = vec![0.8, -0.2, 0.8, -0.2, 0.8, -0.2, 0.8, -0.2];
+    apply_output_mode_crossfade(ChannelMode::Left, ChannelMode::Right, &mut mix, &mut block);
+    // Left maps both channels to l = 0.8, Right maps both to r = -0.2, so
+    // every channel follows the same 0.8 -> -0.2 blend over the 4 frames.
+    let expected = [0.55, 0.55, 0.3, 0.3, 0.05, 0.05, -0.2, -0.2];
+    for (actual, expected) in block.iter().zip(expected) {
+        assert!(
+            (actual - expected).abs() < 1.0e-6,
+            "blend point: {actual} vs {expected}"
+        );
+    }
+}
+
+#[test]
+fn source_mode_switch_crossfades_without_clicks() {
+    let (mut source, mut source_handle, source_controls, channel_controls, _) =
+        source_setup(CHANNELS);
+    let (mut bus, mut bus_handle, _, _, _) = bus_setup(CHANNELS);
+    let route_id = RouteId::new();
+    let mut source_generation = 0;
+    let mut bus_generation = 0;
+    link(
+        &mut source_handle,
+        &mut bus_handle,
+        route_id,
+        &mut source_generation,
+        &mut bus_generation,
+        &source_controls,
+    );
+
+    // Distinct constant channels: L = 0.8, R = -0.2.
+    let mut input = vec![0.0_f32; QUANTUM as usize * CHANNELS];
+    for frame in input.chunks_exact_mut(2) {
+        frame[0] = 0.8;
+        frame[1] = -0.2;
+    }
+    let mut output = vec![0.0_f32; QUANTUM as usize * CHANNELS];
+    for _ in 0..8 {
+        source.process(&input);
+        bus.process(&mut output);
+    }
+    assert!(
+        (output[output.len() - 2] - 0.8).abs() < 0.01,
+        "Auto maps L to the left channel"
+    );
+
+    // Switch the source to Right mid-stream: the left bus channel must
+    // travel 0.8 -> -0.2 as a ramp, never as a step.
+    channel_controls.mode.store(
+        ChannelMode::Right.code(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    let mut previous = output[output.len() - 2];
+    let mut max_step = 0.0_f32;
+    let mut final_left = previous;
+    for _ in 0..12 {
+        source.process(&input);
+        bus.process(&mut output);
+        for frame in output.chunks_exact(2) {
+            max_step = max_step.max((frame[0] - previous).abs());
+            previous = frame[0];
+            final_left = frame[0];
+        }
+    }
+    assert!(
+        max_step < 0.01,
+        "mode switch must crossfade, not click (max step {max_step})"
+    );
+    assert!(
+        (final_left + 0.2).abs() < 0.01,
+        "converged to the Right mapping: {final_left}"
+    );
+}
+
+#[test]
+fn bus_mode_switch_crossfades_without_clicks() {
+    let (mut source, mut source_handle, source_controls, _, _) = source_setup(CHANNELS);
+    let (mut bus, mut bus_handle, _, channel_controls, _) = bus_setup(CHANNELS);
+    let route_id = RouteId::new();
+    let mut source_generation = 0;
+    let mut bus_generation = 0;
+    link(
+        &mut source_handle,
+        &mut bus_handle,
+        route_id,
+        &mut source_generation,
+        &mut bus_generation,
+        &source_controls,
+    );
+
+    let mut input = vec![0.0_f32; QUANTUM as usize * CHANNELS];
+    for frame in input.chunks_exact_mut(2) {
+        frame[0] = 0.8;
+        frame[1] = -0.2;
+    }
+    let mut output = vec![0.0_f32; QUANTUM as usize * CHANNELS];
+    for _ in 0..8 {
+        source.process(&input);
+        bus.process(&mut output);
+    }
+
+    // Swap on the bus: the right channel travels -0.2 -> 0.8 as a ramp.
+    channel_controls.mode.store(
+        ChannelMode::Swap.code(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    let mut previous = output[output.len() - 1];
+    let mut max_step = 0.0_f32;
+    let mut final_right = previous;
+    for _ in 0..12 {
+        source.process(&input);
+        bus.process(&mut output);
+        for frame in output.chunks_exact(2) {
+            max_step = max_step.max((frame[1] - previous).abs());
+            previous = frame[1];
+            final_right = frame[1];
+        }
+    }
+    assert!(
+        max_step < 0.01,
+        "bus mode switch must crossfade, not click (max step {max_step})"
+    );
+    assert!(
+        (final_right - 0.8).abs() < 0.01,
+        "converged to the swapped mapping: {final_right}"
+    );
+}
+
+#[test]
 fn corrector_target_is_one_quantum_validated_to_two() {
     assert_eq!(corrector_target_frames(512, TARGET_QUANTA), 512);
     assert_eq!(corrector_target_frames(512, MAX_TARGET_QUANTA), 1024);
@@ -588,6 +722,135 @@ fn plan_churn_under_continuous_audio_stays_stable() {
         "every churned route must be retired: {bus_debug:?}"
     );
     assert!(output.iter().all(|sample| *sample == 0.0));
+}
+
+#[test]
+fn hot_mix_is_bounded_by_the_always_on_saturator() {
+    // Two full-scale routes into one bus: the sum reaches 2.0, and the
+    // saturator must keep the output at or under 1.0 without folding.
+    let (mut source_a, mut handle_a, controls_a, _, _) = source_setup(CHANNELS);
+    let (mut source_b, mut handle_b, controls_b, _, _) = source_setup(CHANNELS);
+    let (mut bus, mut bus_handle, _, _, _) = bus_setup(CHANNELS);
+    let route_a = RouteId::new();
+    let route_b = RouteId::new();
+    let mut generation_a = 0_u64;
+    let mut generation_b = 0_u64;
+    let mut generation_bus = 0_u64;
+    for (handle, route_id, generation) in [
+        (&mut handle_a, route_a, &mut generation_a),
+        (&mut handle_b, route_b, &mut generation_b),
+    ] {
+        *generation += 1;
+        let old = handle.plan_slot.publish(SourcePlan {
+            generation: *generation,
+            feeds: vec![RouteFeed {
+                route_id,
+                bus_channels: CHANNELS,
+            }],
+        });
+        handle.reclaimer.retire(old);
+    }
+    generation_bus += 1;
+    let old = bus_handle.plan_slot.publish(BusPlan {
+        generation: generation_bus,
+        routes: vec![route_a, route_b],
+    });
+    bus_handle.reclaimer.retire(old);
+    for (handle, route_id, controls, source_generation) in [
+        (&mut handle_a, route_a, &controls_a, &mut generation_a),
+        (&mut handle_b, route_b, &controls_b, &mut generation_b),
+    ] {
+        let link = RouteLink::new(route_id, CHANNELS, QUANTUM, TARGET_QUANTA).expect("link");
+        let (source_half, bus_half) = link
+            .into_halves(*source_generation, generation_bus, controls.balance_gains())
+            .expect("halves");
+        handle.inbox.push(source_half).expect("capacity");
+        bus_handle.inbox.push(bus_half).expect("capacity");
+    }
+
+    let input_a = constant_block(1.0, QUANTUM as usize, CHANNELS);
+    let input_b = constant_block(1.0, QUANTUM as usize, CHANNELS);
+    let mut output = constant_block(0.0, QUANTUM as usize, CHANNELS);
+    for _ in 0..8 {
+        source_a.process(&input_a);
+        source_b.process(&input_b);
+        bus.process(&mut output);
+    }
+
+    assert!(
+        output.iter().all(|sample| sample.abs() <= 1.0),
+        "the summed bus must never exceed ±1.0"
+    );
+    let tail = &output[output.len() - 8..];
+    assert!(
+        tail.iter().all(|sample| *sample > 0.9),
+        "a hot but legal mix saturates close to full scale: {tail:?}"
+    );
+}
+
+#[test]
+fn meters_report_rms_and_pre_saturator_clip() {
+    // Two routes from one source into one bus: 0.8 + 0.8 sums past full
+    // scale. The output is bounded by the saturator and the peak meter reads
+    // the bounded signal, but the clip flag must still fire.
+    let (mut source, mut source_handle, source_controls, _, _) = source_setup(CHANNELS);
+    let (mut bus, mut bus_handle, _, _, bus_meter) = bus_setup(CHANNELS);
+    let route_a = RouteId::new();
+    let route_b = RouteId::new();
+
+    let old_source = source_handle.plan_slot.publish(SourcePlan {
+        generation: 1,
+        feeds: vec![
+            RouteFeed {
+                route_id: route_a,
+                bus_channels: CHANNELS,
+            },
+            RouteFeed {
+                route_id: route_b,
+                bus_channels: CHANNELS,
+            },
+        ],
+    });
+    source_handle.reclaimer.retire(old_source);
+    let old_bus = bus_handle.plan_slot.publish(BusPlan {
+        generation: 1,
+        routes: vec![route_a, route_b],
+    });
+    bus_handle.reclaimer.retire(old_bus);
+    for route_id in [route_a, route_b] {
+        let link = RouteLink::new(route_id, CHANNELS, QUANTUM, TARGET_QUANTA).expect("link");
+        let (source_half, bus_half) = link
+            .into_halves(1, 1, source_controls.balance_gains())
+            .expect("halves");
+        source_handle.inbox.push(source_half).expect("capacity");
+        bus_handle.inbox.push(bus_half).expect("capacity");
+    }
+
+    let input = constant_block(0.8, QUANTUM as usize, CHANNELS);
+    let mut output = constant_block(0.0, QUANTUM as usize, CHANNELS);
+    for _ in 0..8 {
+        source.process(&input);
+        bus.process(&mut output);
+    }
+
+    let readings: Vec<_> = bus_meter.readings().collect();
+    assert_eq!(readings.len(), CHANNELS);
+    for reading in &readings {
+        assert!(reading.clipped, "hot mix must raise the clip flag");
+        assert!(reading.peak <= 1.0, "peak reads the bounded output");
+        assert!(reading.peak > 0.9, "saturated mix stays near full scale");
+        // Output converges to soft_clip(1.6) for a constant input, so RMS
+        // tracks that level, not the unbounded sum.
+        let expected = orion_dsp::soft_clip(1.6);
+        assert!(
+            (reading.rms - expected).abs() < 0.02,
+            "RMS tracks the bounded signal: {} vs {expected}",
+            reading.rms
+        );
+    }
+    // A second window with no new clip: flag clears on read.
+    let readings: Vec<_> = bus_meter.readings().collect();
+    assert!(readings.iter().all(|reading| !reading.clipped));
 }
 
 #[test]
