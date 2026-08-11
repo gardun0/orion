@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/gardun0/orion/compare/v0.1.3...v0.1.4) (2026-08-11)
+
+
+### Bug Fixes
+
+* pin windows/windows-core to 0.62.2 for a consistent WASAPI build ([f579eab](https://github.com/gardun0/orion/commit/f579eab838e5ecafc0091590a8541d65c6625a4b))
+
 ## [0.1.3](https://github.com/gardun0/orion/compare/v0.1.2...v0.1.3) (2026-08-11)
 
 
