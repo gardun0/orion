@@ -136,7 +136,7 @@ jobs:
       - name: Upload assets to GitHub Release
         run: gh release upload "v${VERSION}" dist/* --clobber
       - name: Mark pre-1.0 releases as prerelease
-        if: startsWith(needs.release-please.outputs.version, '0.')
+        if: startsWith(env.VERSION, '0.')
         run: gh release edit "v${VERSION}" --prerelease
 
   aur:
