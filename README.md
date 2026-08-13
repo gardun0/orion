@@ -9,6 +9,8 @@
   [![Release](https://img.shields.io/github/v/release/gardun0/orion?include_prereleases)](https://github.com/gardun0/orion/releases)
   [![AUR](https://img.shields.io/aur/version/orion-bin)](https://aur.archlinux.org/packages/orion-bin)
   [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
+
+  <img src="assets/docs/mixer-screenshot.png" alt="Orion mixer workspace: source strips with faders, EQ and routing on the left, output buses on the right" width="900">
 </div>
 
 ---
@@ -54,17 +56,17 @@ the macOS/Windows backends that now compile and package in CI — see the
 | ![](assets/docs/route.png) | **Routing** — per-strip route buttons and a routing matrix, both driving live PipeWire route streams; routing intent survives device sleep, hot-plug, and rebinding, and self-heals if a route stalls |
 | ![](assets/docs/virtual.png) | **Virtual devices** — virtual inputs that receive audio from applications and virtual outputs that applications can use as microphones; created automatically and managed from the UI |
 | ![](assets/docs/physical.png) ![](assets/docs/app.png) | **Endpoint discovery** — PipeWire sources and sinks, default device tracking, and hot-plug updates |
-| ![](assets/docs/sound.png) | **Live meters** — elastic per-channel L/R meters (−90…0 dB with peak-hold marks and RMS markers) fed by the real-time engine, a per-strip clip LED, plus process CPU load in the footer |
-| ![](assets/docs/sound.png) | **Clipping protection** — an always-on soft-knee saturator (−1 dBFS knee) bounds every bus post-mix; clip detection runs pre-saturator, so driving a bus stays visible on the meter |
-| ![](assets/docs/scenes.png) | **Scenes & settings** — scenes track the mixer live while selected; everything persists to `settings.json` (schema v2) with atomic autosave, live reload on external edits, import/export, and a published JSON Schema ([`schema/settings.schema.json`](schema/settings.schema.json)) |
-| ![](assets/docs/configuration.png) | **Native desktop app** — GPUI interface on Linux (Wayland and X11), Windows, and macOS, with embedded fonts and icons and no runtime asset dependencies |
+| ![](assets/docs/meters.png) | **Live meters** — elastic per-channel L/R meters (−90…0 dB with peak-hold marks and RMS markers) fed by the real-time engine, a per-strip clip LED, plus process CPU load in the footer |
+| ![](assets/docs/protect.png) | **Clipping protection** — an always-on soft-knee saturator (−1 dBFS knee) bounds every bus post-mix; clip detection runs pre-saturator, so driving a bus stays visible on the meter |
+| ![](assets/docs/scenes.png) ![](assets/docs/persist.png) | **Scenes & settings** — scenes track the mixer live while selected; everything persists to `settings.json` (schema v2) with atomic autosave, live reload on external edits, import/export, and a published JSON Schema ([`schema/settings.schema.json`](schema/settings.schema.json)) |
+| ![](assets/docs/cat.png) | **Native desktop app** — GPUI interface on Linux (Wayland and X11), Windows, and macOS, with embedded fonts and icons and no runtime asset dependencies |
 
 ### In development
 
 | | |
 |---|---|
-| ![](assets/docs/sound.png) | **Engine telemetry** — latency and XRun stats (CPU load and live level meters already work) |
-| ![](assets/docs/eq.png) | **EQ presets for gaming** — named profiles tuned for titles like Warzone and CS2, built on the 3-band EQ that already works per endpoint |
+| ![](assets/docs/telemetry.png) | **Engine telemetry** — latency and XRun stats (CPU load and live level meters already work) |
+| ![](assets/docs/presets.png) | **EQ presets for gaming** — named profiles tuned for titles like Warzone and CS2, built on the 3-band EQ that already works per endpoint |
 | ![](assets/docs/platforms.png) | **macOS & Windows validation** — a cpal-based backend drives the same real-time engine on both OSes; CI compiles, tests, and packages all three platforms (zip on Windows, unsigned `.app` on macOS); runtime validation and signed installers come next |
 
 Have an idea that's not on the list?
@@ -130,7 +132,7 @@ assets/
   app-icon/             application icon (SVG + PNG sizes)
   fonts/                Inter and JetBrains Mono (SIL OFL 1.1)
   icons/                UI icon set (see Attribution)
-  docs/                 colored icon copies used by this README
+  docs/                 colored icon copies and the screenshot used by this README
   linux/                desktop entry and AppStream metainfo
 packaging/
   appimage/             AppImage build script (linuxdeploy)
