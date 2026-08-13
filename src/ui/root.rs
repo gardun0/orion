@@ -103,7 +103,13 @@ impl RootView {
                     let persistence_changed = this.apply_persistence_events();
                     let reloaded = this.maybe_reload_settings();
                     let cpu_changed = this.sample_cpu_load();
-                    if this.apply_engine_events() | persistence_changed | reloaded | cpu_changed {
+                    let meters_changed = this.check_stale_meters();
+                    if this.apply_engine_events()
+                        | persistence_changed
+                        | reloaded
+                        | cpu_changed
+                        | meters_changed
+                    {
                         cx.notify();
                     }
                     // Debounced save: route/scene changes settle asynchronously
@@ -977,14 +983,18 @@ impl RootView {
         editor: &crate::state::ChannelEditor,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let virtual_supported = self.state.backend_capabilities.virtual_devices;
+        let capabilities = self.state.backend_capabilities;
         let roles: Vec<EditorRole> = if editor.is_source {
             EditorRole::SOURCES.to_vec()
         } else {
             EditorRole::OUTPUTS.to_vec()
         }
         .into_iter()
-        .filter(|role| virtual_supported || *role != EditorRole::Virtual)
+        .filter(|role| match role {
+            EditorRole::Virtual => capabilities.virtual_devices,
+            EditorRole::Application => capabilities.application_sources,
+            EditorRole::Physical => true,
+        })
         .collect();
         let physical_full = editor.is_source
             && self.state.physical_source_count() >= crate::state::MAX_PHYSICAL_INPUT_CHANNELS;
@@ -2223,6 +2233,52 @@ impl RootView {
         for kind in commands {
             self.send_engine_command(kind);
         }
+    }
+
+    /// Zero strips whose endpoint stopped reporting meter frames (device
+    /// removed or suspended): a strip must never hold a stale level.
+    /// Returns whether anything changed.
+    fn check_stale_meters(&mut self) -> bool {
+        const STALE_AFTER: Duration = Duration::from_millis(500);
+        let mut changed = false;
+        let mut sweep = |meter_l: &mut f32,
+                         meter_r: &mut f32,
+                         rms_l: &mut f32,
+                         rms_r: &mut f32,
+                         clip_until: &mut Option<std::time::Instant>,
+                         last_meter_at: &mut Option<std::time::Instant>| {
+            let stale = last_meter_at.is_some_and(|at| at.elapsed() >= STALE_AFTER);
+            if stale {
+                *meter_l = 0.0;
+                *meter_r = 0.0;
+                *rms_l = 0.0;
+                *rms_r = 0.0;
+                *clip_until = None;
+                *last_meter_at = None;
+                changed = true;
+            }
+        };
+        for source in &mut self.state.sources {
+            sweep(
+                &mut source.meter_l,
+                &mut source.meter_r,
+                &mut source.meter_rms_l,
+                &mut source.meter_rms_r,
+                &mut source.clip_until,
+                &mut source.last_meter_at,
+            );
+        }
+        for output in &mut self.state.outputs {
+            sweep(
+                &mut output.meter_l,
+                &mut output.meter_r,
+                &mut output.meter_rms_l,
+                &mut output.meter_rms_r,
+                &mut output.clip_until,
+                &mut output.last_meter_at,
+            );
+        }
+        changed
     }
 
     /// Drain persistence worker events; surfaces save failures in the status

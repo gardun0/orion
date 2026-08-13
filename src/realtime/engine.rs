@@ -202,12 +202,14 @@ impl RouteLink {
         bus_channels: usize,
         quantum_frames: u32,
         target_quanta: u32,
+        sample_rate: u32,
     ) -> Result<Self, DspError> {
         let capacity = ring_capacity_frames(quantum_frames).saturating_mul(bus_channels.max(1));
         let (producer, consumer) = RingBuffer::new(capacity);
         let corrector = DriftCorrector::new(
             bus_channels,
             corrector_target_frames(quantum_frames, target_quanta),
+            sample_rate,
         )?;
         Ok(Self {
             route_id,

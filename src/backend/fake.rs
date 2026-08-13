@@ -24,6 +24,7 @@ impl Default for FakeBackend {
             // support; tests override to simulate restricted platforms.
             capabilities: BackendCapabilities {
                 virtual_devices: true,
+                application_sources: true,
             },
         }
     }
@@ -35,6 +36,7 @@ impl FakeBackend {
             endpoints,
             capabilities: BackendCapabilities {
                 virtual_devices: true,
+                application_sources: true,
             },
             routes: Vec::new(),
         }
@@ -284,7 +286,8 @@ mod tests {
             event_rx.recv_timeout(Duration::from_secs(1)),
             Ok(BackendEvent::Capabilities {
                 capabilities: BackendCapabilities {
-                    virtual_devices: true
+                    virtual_devices: true,
+                    application_sources: true,
                 }
             })
         ));

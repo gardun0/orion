@@ -405,7 +405,7 @@ fn meter_sanitizes_nonfinite_samples_and_saturates_clip_count() {
 
 #[test]
 fn drift_corrector_passes_audio_through_at_nominal_rate() {
-    let mut corrector = DriftCorrector::new(2, 512).expect("stereo corrector");
+    let mut corrector = DriftCorrector::new(2, 512, 48_000).expect("stereo corrector");
     let input: Vec<f32> = (0..4_096)
         .map(|frame| (frame as f32 * 0.05).sin() * 0.5)
         .collect();
@@ -428,7 +428,7 @@ fn drift_corrector_passes_audio_through_at_nominal_rate() {
 
 #[test]
 fn drift_corrector_ratio_tracks_occupancy_direction() {
-    let mut corrector = DriftCorrector::new(2, 512).expect("corrector");
+    let mut corrector = DriftCorrector::new(2, 512, 48_000).expect("corrector");
     let mut output = vec![0.0_f32; 2 * 128];
     let mut pull = || Some(0.1_f32);
 
@@ -454,7 +454,7 @@ fn drift_corrector_ratio_tracks_occupancy_direction() {
 
 #[test]
 fn drift_corrector_holds_last_frame_on_underrun_without_clicks() {
-    let mut corrector = DriftCorrector::new(2, 512).expect("corrector");
+    let mut corrector = DriftCorrector::new(2, 512, 48_000).expect("corrector");
     let mut output = vec![0.0_f32; 2 * 256];
     let mut provided = true;
     corrector.process(&mut output, 2, 0, &mut || {
@@ -477,10 +477,60 @@ fn drift_corrector_holds_last_frame_on_underrun_without_clicks() {
 }
 
 #[test]
+fn drift_corrector_releases_to_silence_after_the_hold_bound() {
+    // 25 ms hold limit at 48 kHz is 1200 frames.
+    let mut corrector = DriftCorrector::new(2, 512, 48_000).expect("corrector");
+    let mut provided = 0usize;
+    // Two real frames then underrun: the pull closure starves after them.
+    let mut pull = move || {
+        provided += 1;
+        if provided <= 2 {
+            Some(0.75_f32)
+        } else {
+            None
+        }
+    };
+
+    // Short underrun: held frame present (legacy anti-click behavior).
+    let mut output = vec![0.0_f32; 2 * 256];
+    corrector.process(&mut output, 2, 0, &mut pull);
+    assert!(
+        output.iter().any(|sample| sample.abs() > 0.1),
+        "held frame shows up under the bound"
+    );
+
+    // Long underrun: output must settle to silence, not hold the tone.
+    let mut output = vec![0.0_f32; 2 * 4_096];
+    corrector.process(&mut output, 2, 0, &mut pull);
+    let tail = &output[output.len() - 2 * 512..];
+    assert!(
+        tail.iter().all(|sample| sample.abs() < 1.0e-3),
+        "starved past the bound, the corrector must go silent, got {}",
+        tail.iter().fold(0.0_f32, |peak, s| peak.max(s.abs()))
+    );
+
+    // And it recovers when samples return.
+    provided = 0;
+    let mut pull = move || {
+        provided += 1;
+        if provided <= 512 {
+            Some(0.5_f32)
+        } else {
+            None
+        }
+    };
+    corrector.process(&mut output, 2, 0, &mut pull);
+    assert!(
+        output.iter().any(|sample| sample.abs() > 0.1),
+        "audio flows again after the starved window"
+    );
+}
+
+#[test]
 fn drift_corrector_supports_multichannel_buses() {
     // Buses are not always stereo: a corrector on a 4-channel bus must hold
     // one frame per channel and keep every channel finite and aligned.
-    let mut corrector = DriftCorrector::new(4, 512).expect("4-channel corrector");
+    let mut corrector = DriftCorrector::new(4, 512, 48_000).expect("4-channel corrector");
     let mut read = 0usize;
     let input: Vec<f32> = (0..2_048).map(|i| (i as f32 * 0.01).sin()).collect();
     let mut output = vec![0.0_f32; 4 * 256];
@@ -496,14 +546,14 @@ fn drift_corrector_supports_multichannel_buses() {
         output.iter().any(|sample| sample.abs() > 0.01),
         "signal must reach every channel"
     );
-    assert!(DriftCorrector::new(0, 512).is_err());
-    assert!(DriftCorrector::new(MAX_CHANNELS + 1, 512).is_err());
+    assert!(DriftCorrector::new(0, 512, 48_000).is_err());
+    assert!(DriftCorrector::new(MAX_CHANNELS + 1, 512, 48_000).is_err());
 }
 
 #[test]
 fn drift_corrector_converges_under_simulated_clock_drift() {
     let target = 512usize;
-    let mut corrector = DriftCorrector::new(2, target).expect("corrector");
+    let mut corrector = DriftCorrector::new(2, target, 48_000).expect("corrector");
     let mut ring: std::collections::VecDeque<f32> = std::collections::VecDeque::new();
     let mut phase = 0.0_f32;
     let mut output = vec![0.0_f32; 2 * 256];

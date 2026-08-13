@@ -18,8 +18,9 @@ pub struct ChannelReading {
 
 pub struct RouteMeter {
     peaks: Box<[AtomicU32]>,
-    /// Last emitted level per channel; decays when no new samples arrive so
-    /// idle routes fall smoothly instead of snapping to silence.
+    /// Last emitted level per channel; decays quickly (x0.5 per publish
+    /// window) when no new samples arrive, so idle routes fall in ~350 ms
+    /// instead of snapping to silence or lingering.
     last: Box<[AtomicU32]>,
     dirty: AtomicBool,
     sequence: AtomicU64,
@@ -117,8 +118,9 @@ impl RouteMeter {
                 last_rms.store(rms.to_bits(), Ordering::Relaxed);
                 (peak, rms)
             } else {
-                let peak = f32::from_bits(last.load(Ordering::Relaxed)) * 0.7;
-                let rms = f32::from_bits(last_rms.load(Ordering::Relaxed)) * 0.7;
+                // Idle fall: 0.5 per publish window (~350 ms to the floor).
+                let peak = f32::from_bits(last.load(Ordering::Relaxed)) * 0.5;
+                let rms = f32::from_bits(last_rms.load(Ordering::Relaxed)) * 0.5;
                 last.store(peak.to_bits(), Ordering::Relaxed);
                 last_rms.store(rms.to_bits(), Ordering::Relaxed);
                 (peak, rms)

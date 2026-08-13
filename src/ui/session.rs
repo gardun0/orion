@@ -269,6 +269,7 @@ pub(crate) fn apply_document(
                 meter_r: 0.0,
                 meter_rms_l: 0.0,
                 meter_rms_r: 0.0,
+                last_meter_at: None,
                 clip_until: None,
                 online: false,
             })
@@ -304,6 +305,7 @@ pub(crate) fn apply_document(
                 meter_r: 0.0,
                 meter_rms_l: 0.0,
                 meter_rms_r: 0.0,
+                last_meter_at: None,
                 clip_until: None,
                 online: false,
             })

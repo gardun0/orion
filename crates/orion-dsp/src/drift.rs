@@ -10,6 +10,9 @@ const INTEGRAL_LIMIT: f64 = 512.0;
 const MAX_ADJUST: f64 = 0.002;
 /// Slew limit per callback so ratio changes never wobble the pitch.
 const MAX_RATIO_STEP: f64 = 2.0e-5;
+/// An underrun is held this long (25 ms) — enough for real scheduling jitter,
+/// short enough that a paused source reads as silence on the meters.
+const HOLD_LIMIT_MS: u32 = 25;
 
 /// Adaptive drift corrector for a producer/consumer ring between two devices
 /// with independent clocks. The consumer reads through a fractional pointer
@@ -20,6 +23,11 @@ const MAX_RATIO_STEP: f64 = 2.0e-5;
 ///
 /// At the nominal ratio (1.0) the output is the input delayed by exactly one
 /// frame — the interpolator needs two points — with no other coloration.
+///
+/// Underrun behavior: the last real frame is held while the ring is starved,
+/// but only for `HOLD_LIMIT_MS` — past that the interpolator glides to
+/// silence, so a paused source reads as silence instead of holding a level
+/// (and a constant DC tone) forever.
 pub struct DriftCorrector {
     target_frames: usize,
     integral: f64,
@@ -28,12 +36,19 @@ pub struct DriftCorrector {
     // One held frame per channel; sized once at construction, never grows.
     previous: Vec<f32>,
     current: Vec<f32>,
+    /// Consecutive starved frames so far, and the bound (25 ms) after which
+    /// the held frame is released to silence.
+    starved_frames: usize,
+    hold_limit_frames: usize,
 }
 
 impl DriftCorrector {
-    pub fn new(channels: usize, target_frames: usize) -> Result<Self, DspError> {
+    pub fn new(channels: usize, target_frames: usize, sample_rate: u32) -> Result<Self, DspError> {
         if !(1..=MAX_CHANNELS).contains(&channels) {
             return Err(DspError::InvalidChannelCount(channels));
+        }
+        if sample_rate == 0 {
+            return Err(DspError::InvalidSampleRate(0));
         }
         Ok(Self {
             target_frames,
@@ -42,6 +57,8 @@ impl DriftCorrector {
             frac: 0.0,
             previous: vec![0.0; channels],
             current: vec![0.0; channels],
+            starved_frames: 0,
+            hold_limit_frames: (sample_rate as usize / 1_000 * HOLD_LIMIT_MS as usize).max(1),
         })
     }
 
@@ -55,7 +72,8 @@ impl DriftCorrector {
 
     /// Write `output` frames of `channels` interleaved samples, pulling from
     /// `pull` at the drift-adjusted rate. `pull` returns None on underrun; the
-    /// corrector then holds the last real frame instead of emitting zeros.
+    /// corrector holds the last real frame for up to 25 ms, then glides to
+    /// silence (one interpolation step — no click).
     pub fn process(
         &mut self,
         output: &mut [f32],
@@ -70,11 +88,23 @@ impl DriftCorrector {
             while self.frac >= 1.0 {
                 // clone_from reuses the existing allocation (no RT alloc).
                 self.previous.clone_from(&self.current);
+                let mut got_sample = false;
                 for channel in 0..channels {
                     if let Some(sample) = pull() {
                         self.current[channel] = sample;
+                        got_sample = true;
                     }
-                    // None: hold `current` — output glides to the held value.
+                }
+                if got_sample {
+                    self.starved_frames = 0;
+                } else {
+                    self.starved_frames += 1;
+                    if self.starved_frames >= self.hold_limit_frames {
+                        // Starved past the bound: release to silence; the
+                        // previous->current interpolation glides there in one
+                        // step, so no click.
+                        self.current.fill(0.0);
+                    }
                 }
                 self.frac -= 1.0;
             }
