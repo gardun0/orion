@@ -4702,7 +4702,7 @@ dependencies = [
 
 [[package]]
 name = "orion"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "arc-swap",
  "cpal",
@@ -4736,7 +4736,7 @@ dependencies = [
 
 [[package]]
 name = "orion-dsp"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "dasp",
 ]
