@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.5](https://github.com/gardun0/orion/compare/v0.1.4...v0.1.5) (2026-08-13)
+
+
+### Features
+
+* per-application audio capture on Windows (WASAPI loopback) and macOS (Core Audio taps) ([4dba3bb](https://github.com/gardun0/orion/commit/4dba3bb0bc06e63fbdf09b9818cd2cce4a500025))
+
+
+### Documentation
+
+* showcase mixer screenshot and deduplicate feature-table icons in README ([7780c37](https://github.com/gardun0/orion/commit/7780c370ecd6b62d9e3402c84f9b62b685786c41))
+
 ## [0.1.4](https://github.com/gardun0/orion/compare/v0.1.3...v0.1.4) (2026-08-11)
 
 
