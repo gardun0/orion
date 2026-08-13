@@ -23,5 +23,9 @@
   <string>12.0</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <!-- Process taps (per-app audio capture) trigger the TCC audio-capture
+       prompt; this text explains it. Feature itself needs macOS 14.2+. -->
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Orion captures other applications' audio when you route them through the mixer.</string>
 </dict>
 </plist>

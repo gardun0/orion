@@ -1,10 +1,14 @@
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod cpal_backend;
 mod fake;
+#[cfg(target_os = "macos")]
+mod macos_tap;
 #[cfg(target_os = "linux")]
 mod pipewire;
 #[cfg(target_os = "linux")]
 mod streams;
+#[cfg(target_os = "windows")]
+mod windows_loopback;
 
 use crossbeam_channel::{Receiver, Sender};
 use serde::{Deserialize, Serialize};

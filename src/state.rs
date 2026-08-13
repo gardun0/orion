@@ -244,6 +244,8 @@ pub struct SourceStrip {
     pub meter_rms_r: f32,
     /// Clip LED: lit until this instant after any channel hit full scale.
     pub clip_until: Option<std::time::Instant>,
+    /// Last time a meter frame landed; strips that stop reporting go silent.
+    pub last_meter_at: Option<std::time::Instant>,
     pub online: bool,
 }
 
@@ -289,6 +291,8 @@ pub struct OutputBus {
     pub meter_rms_r: f32,
     /// Clip LED: lit until this instant after any channel hit full scale.
     pub clip_until: Option<std::time::Instant>,
+    /// Last time a meter frame landed; strips that stop reporting go silent.
+    pub last_meter_at: Option<std::time::Instant>,
     pub online: bool,
 }
 
@@ -615,8 +619,15 @@ impl AppState {
             if editor.is_source && role == EditorRole::Physical && physical_full {
                 return;
             }
-            // Virtual devices only exist if the backend reports the capability.
-            if role == EditorRole::Virtual && !self.backend_capabilities.virtual_devices {
+            let capabilities = self.backend_capabilities;
+            // Virtual devices and application sources only exist if the
+            // backend reports the capability.
+            let supported = match role {
+                EditorRole::Virtual => capabilities.virtual_devices,
+                EditorRole::Application => capabilities.application_sources,
+                EditorRole::Physical => true,
+            };
+            if !supported {
                 return;
             }
             editor.role = role;
@@ -690,6 +701,7 @@ impl AppState {
             meter_r: 0.0,
             meter_rms_l: 0.0,
             meter_rms_r: 0.0,
+            last_meter_at: None,
             clip_until: None,
             online: false,
         });
@@ -717,6 +729,7 @@ impl AppState {
             meter_r: 0.0,
             meter_rms_l: 0.0,
             meter_rms_r: 0.0,
+            last_meter_at: None,
             clip_until: None,
             online: false,
         });
@@ -1403,6 +1416,7 @@ impl AppState {
         let clipped = left.is_some_and(|l| l.clipped) || right.is_some_and(|r| r.clipped);
         for source in &mut self.sources {
             if source.endpoint_id == Some(frame.endpoint_id) {
+                source.last_meter_at = Some(std::time::Instant::now());
                 changed |= update_meter_pair(
                     &mut source.meter_l,
                     &mut source.meter_r,
@@ -1426,6 +1440,7 @@ impl AppState {
         }
         for output in &mut self.outputs {
             if output.endpoint_id == Some(frame.endpoint_id) {
+                output.last_meter_at = Some(std::time::Instant::now());
                 changed |= update_meter_pair(
                     &mut output.meter_l,
                     &mut output.meter_r,
@@ -1588,6 +1603,7 @@ fn default_source_template(route_count: usize) -> Vec<SourceStrip> {
             meter_r: 0.0,
             meter_rms_l: 0.0,
             meter_rms_r: 0.0,
+            last_meter_at: None,
             clip_until: None,
             online: false,
         },
@@ -1609,6 +1625,7 @@ fn default_source_template(route_count: usize) -> Vec<SourceStrip> {
             meter_r: 0.0,
             meter_rms_l: 0.0,
             meter_rms_r: 0.0,
+            last_meter_at: None,
             clip_until: None,
             online: false,
         },
@@ -1630,6 +1647,7 @@ fn default_source_template(route_count: usize) -> Vec<SourceStrip> {
             meter_r: 0.0,
             meter_rms_l: 0.0,
             meter_rms_r: 0.0,
+            last_meter_at: None,
             clip_until: None,
             online: false,
         },
@@ -1656,6 +1674,7 @@ fn default_output_template() -> Vec<OutputBus> {
             meter_r: 0.0,
             meter_rms_l: 0.0,
             meter_rms_r: 0.0,
+            last_meter_at: None,
             clip_until: None,
             online: false,
         },
@@ -1677,6 +1696,7 @@ fn default_output_template() -> Vec<OutputBus> {
             meter_r: 0.0,
             meter_rms_l: 0.0,
             meter_rms_r: 0.0,
+            last_meter_at: None,
             clip_until: None,
             online: false,
         },
@@ -2154,6 +2174,27 @@ mod tests {
     }
 
     #[test]
+    fn application_role_requires_backend_capability() {
+        let mut state = AppState::new(Vec::new());
+        assert!(!state.backend_capabilities.application_sources);
+        state.open_channel_editor(true);
+        state.editor_set_role(EditorRole::Application);
+        assert_ne!(
+            state.channel_editor.as_ref().map(|editor| editor.role),
+            Some(EditorRole::Application),
+            "unsupported application role must not be selectable"
+        );
+
+        state.backend_capabilities.application_sources = true;
+        state.editor_set_role(EditorRole::Application);
+        assert_eq!(
+            state.channel_editor.as_ref().map(|editor| editor.role),
+            Some(EditorRole::Application),
+            "capable backend opens the application role"
+        );
+    }
+
+    #[test]
     fn channel_mode_cycles_and_persists_in_scenes() {
         let mut state = AppState::new(Vec::new());
         assert_eq!(state.sources[0].mode, ChannelMode::Auto);
@@ -2391,6 +2432,34 @@ mod tests {
         assert!(
             state.sources[0].clip_active(),
             "a clipping channel lights the strip LED"
+        );
+    }
+
+    #[test]
+    fn meter_frames_stamp_the_strip_clock_for_stale_detection() {
+        let source = endpoint(EndpointType::PhysicalInput);
+        let mut state = AppState::new(Vec::new());
+        state.set_devices(vec![source.clone()]);
+        state.sources[0].endpoint_id = Some(source.id);
+        assert!(state.sources[0].last_meter_at.is_none());
+
+        let channel_levels = |peak: f32, rms: f32| ChannelLevels {
+            peak: MeterLevel::new(peak).unwrap_or_default(),
+            rms: MeterLevel::new(rms).unwrap_or_default(),
+            clipped: false,
+        };
+        let levels = HashMap::from([
+            (source.channels[0], channel_levels(0.5, 0.25)),
+            (source.channels[1], channel_levels(0.5, 0.25)),
+        ]);
+        state.apply_meter(MeterFrame {
+            endpoint_id: source.id,
+            sequence: 1,
+            levels,
+        });
+        assert!(
+            state.sources[0].last_meter_at.is_some(),
+            "a meter frame stamps the strip's clock"
         );
     }
 

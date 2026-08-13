@@ -101,7 +101,8 @@ fn process_is_allocation_free_after_warmup() {
         routes: vec![route_id],
     });
     bus_handle.reclaimer.retire(old_bus);
-    let link = RouteLink::new(route_id, CHANNELS, FRAMES as u32, TARGET_QUANTA).expect("link");
+    let link =
+        RouteLink::new(route_id, CHANNELS, FRAMES as u32, TARGET_QUANTA, 48_000).expect("link");
     let (source_half, bus_half) = link
         .into_halves(1, 1, source_controls.balance_gains())
         .expect("halves");

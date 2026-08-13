@@ -98,7 +98,7 @@ fn link(
     });
     bus.reclaimer.retire(old_bus);
 
-    let link = RouteLink::new(route_id, CHANNELS, QUANTUM, TARGET_QUANTA).expect("link");
+    let link = RouteLink::new(route_id, CHANNELS, QUANTUM, TARGET_QUANTA, 48_000).expect("link");
     let (source_half, bus_half) = link
         .into_halves(
             *source_generation,
@@ -186,7 +186,8 @@ fn bus_sums_multiple_routes_sample_by_sample() {
         (&mut handle_a, route_a, &controls_a, &mut generation_a),
         (&mut handle_b, route_b, &controls_b, &mut generation_b),
     ] {
-        let link = RouteLink::new(route_id, CHANNELS, QUANTUM, TARGET_QUANTA).expect("link");
+        let link =
+            RouteLink::new(route_id, CHANNELS, QUANTUM, TARGET_QUANTA, 48_000).expect("link");
         let (source_half, bus_half) = link
             .into_halves(*source_generation, generation_bus, controls.balance_gains())
             .expect("halves");
@@ -760,7 +761,8 @@ fn hot_mix_is_bounded_by_the_always_on_saturator() {
         (&mut handle_a, route_a, &controls_a, &mut generation_a),
         (&mut handle_b, route_b, &controls_b, &mut generation_b),
     ] {
-        let link = RouteLink::new(route_id, CHANNELS, QUANTUM, TARGET_QUANTA).expect("link");
+        let link =
+            RouteLink::new(route_id, CHANNELS, QUANTUM, TARGET_QUANTA, 48_000).expect("link");
         let (source_half, bus_half) = link
             .into_halves(*source_generation, generation_bus, controls.balance_gains())
             .expect("halves");
@@ -818,7 +820,8 @@ fn meters_report_rms_and_pre_saturator_clip() {
     });
     bus_handle.reclaimer.retire(old_bus);
     for route_id in [route_a, route_b] {
-        let link = RouteLink::new(route_id, CHANNELS, QUANTUM, TARGET_QUANTA).expect("link");
+        let link =
+            RouteLink::new(route_id, CHANNELS, QUANTUM, TARGET_QUANTA, 48_000).expect("link");
         let (source_half, bus_half) = link
             .into_halves(1, 1, source_controls.balance_gains())
             .expect("halves");

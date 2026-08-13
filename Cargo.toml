@@ -50,17 +50,27 @@ pipewire = { version = "0.10", features = ["v0_3_41"] }
 [target.'cfg(windows)'.dependencies]
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "ae394f3d474f4996d2cdef6ee97551fdb6748acd", package = "gpui_platform" }
 cpal = { version = "0.18", features = ["realtime"] }
-# Resolver pins (unused by Orion code): cpal 0.18 declares `windows` and
-# `windows-core` ranges spanning two semver families (>=0.61, <=0.62), and
-# cargo otherwise unifies them inconsistently next to gpui_windows
-# (windows 0.61) and accesskit_windows (windows-core 0.62), breaking cpal's
-# own WASAPI build. Forcing both to =0.62.2 keeps cpal consistent.
-windows = "=0.62.2"
+# WASAPI process loopback: per-application audio capture (Windows 10 2004+).
+wasapi = "0.23"
+# Resolver pins: cpal 0.18 declares `windows` and `windows-core` ranges
+# spanning two semver families (>=0.61, <=0.62), and cargo otherwise unifies
+# them inconsistently next to gpui_windows (windows 0.61) and
+# accesskit_windows (windows-core 0.62), breaking cpal's own WASAPI build.
+# Forcing both to =0.62.2 keeps cpal consistent; the loopback adapter uses
+# the same pin for process-name lookup.
+windows = { version = "=0.62.2", features = ["Win32_Foundation", "Win32_System_Threading"] }
 windows-core = "=0.62.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "ae394f3d474f4996d2cdef6ee97551fdb6748acd", package = "gpui_platform" }
 cpal = "0.18"
+# Core Audio process taps (macOS 14.2+): per-application audio capture.
+objc2 = "0.6"
+objc2-core-audio = "0.3"
+objc2-core-audio-types = "0.3"
+objc2-core-foundation = "0.3"
+objc2-foundation = "0.3"
+libc = "0.2"
 
 [profile.dev]
 opt-level = 1

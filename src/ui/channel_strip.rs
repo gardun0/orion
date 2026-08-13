@@ -584,7 +584,6 @@ fn paint_fader(bounds: Bounds<Pixels>, normalized: f32, color: u32, window: &mut
     let height: f32 = bounds.size.height.into();
     let origin_x: f32 = bounds.origin.x.into();
     let origin_y: f32 = bounds.origin.y.into();
-    let travel = (height - 10.0 - 18.0).max(0.0);
 
     // Track.
     window.paint_quad(fill(
@@ -592,7 +591,7 @@ fn paint_fader(bounds: Bounds<Pixels>, normalized: f32, color: u32, window: &mut
             origin: point(px(origin_x + 14.0), px(origin_y + 5.0)),
             size: size(px(6.0), px(height - 10.0)),
         },
-        rgb(BASE),
+        rgb(BORDER),
     ));
     // Value fill.
     let fill_h = normalized * (height - 10.0);
@@ -605,26 +604,34 @@ fn paint_fader(bounds: Bounds<Pixels>, normalized: f32, color: u32, window: &mut
             rgb(color),
         ));
     }
-    // Knob cap with grip line.
-    let knob_y = origin_y + 5.0 + (1.0 - normalized) * travel;
-    window.paint_quad(quad(
-        Bounds {
-            origin: point(px(origin_x + 2.0), px(knob_y)),
-            size: size(px(30.0), px(18.0)),
-        },
-        px(3.),
-        rgb(TEXT),
-        px(1.),
-        rgb(TEXT_MUTED),
-        BorderStyle::Solid,
-    ));
-    window.paint_quad(fill(
-        Bounds {
-            origin: point(px(origin_x + 6.0), px(knob_y + 8.0)),
-            size: size(px(22.0), px(2.0)),
-        },
-        rgb(TEXT_MUTED),
-    ));
+    // Circular cap: light disc with a channel-colored ring and a center dot.
+    let cap_diameter = 26.0_f32;
+    let travel = (height - 10.0 - cap_diameter).max(0.0);
+    let cap_center = point(
+        px(origin_x + 17.0),
+        px(origin_y + 5.0 + (1.0 - normalized) * travel + cap_diameter / 2.0),
+    );
+    if let Ok(path) = {
+        let mut builder = PathBuilder::fill();
+        knob_circle(cap_center, 13.0, &mut builder);
+        builder.build()
+    } {
+        window.paint_path(path, rgb(TEXT));
+    }
+    if let Ok(path) = {
+        let mut builder = PathBuilder::stroke(px(2.));
+        knob_circle(cap_center, 12.0, &mut builder);
+        builder.build()
+    } {
+        window.paint_path(path, rgb(color));
+    }
+    if let Ok(path) = {
+        let mut builder = PathBuilder::fill();
+        knob_circle(cap_center, 2.5, &mut builder);
+        builder.build()
+    } {
+        window.paint_path(path, rgb(TEXT_MUTED));
+    }
 }
 
 /// Rotary knob for a strip parameter. Drag vertically to adjust (Shift for

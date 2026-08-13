@@ -40,14 +40,27 @@ const COMMAND_POLL: Duration = Duration::from_millis(10);
 /// cpal backend handle. Constructed empty; everything happens in `run`.
 pub struct CpalBackend;
 
+/// What drives a capture runtime's engine: a cpal device stream, or (on
+/// Windows) a WASAPI process-loopback capture for application sources.
+/// Fields are never read — they are the RAII resource: dropping the runtime
+/// stops the stream/capture.
+#[allow(dead_code)]
+enum CaptureDriver {
+    Device(cpal::Stream),
+    #[cfg(target_os = "windows")]
+    Loopback(super::windows_loopback::LoopbackCapture),
+    #[cfg(target_os = "macos")]
+    Tap(super::macos_tap::TapCapture),
+}
+
 /// Capture stream runtime for one source endpoint: the engine lives inside
-/// the cpal data callback; plan management lives in the publisher.
+/// the driver's data callback; plan management lives in the publisher.
 struct CaptureRuntime {
     endpoint_id: EndpointId,
     meter: Arc<RouteMeter>,
     publisher: SourcePublisher,
     activity: Arc<AtomicU64>,
-    _stream: cpal::Stream,
+    _driver: CaptureDriver,
 }
 
 /// Playback (bus) runtime for one destination endpoint.
@@ -86,6 +99,7 @@ impl AudioBackend for CpalBackend {
             BackendEvent::Capabilities {
                 capabilities: BackendCapabilities {
                     virtual_devices: false,
+                    application_sources: application_sources_supported(),
                 },
             },
         );
@@ -154,6 +168,15 @@ impl AudioBackend for CpalBackend {
 
 fn send_event(events: &Sender<BackendEvent>, event: BackendEvent) {
     let _ = events.send(event);
+}
+
+/// Whether this platform exposes per-application capture: Windows via WASAPI
+/// process loopback, macOS via process taps when the OS has them (14.2+).
+fn application_sources_supported() -> bool {
+    #[cfg(target_os = "windows")]
+    return true;
+    #[cfg(target_os = "macos")]
+    return super::macos_tap::taps_available();
 }
 
 fn backend_error(user: impl Into<String>, technical: impl Into<String>) -> AudioError {
@@ -243,6 +266,18 @@ fn enumerate_endpoints(host: &cpal::Host) -> HashMap<EndpointId, AudioEndpoint> 
                 },
             );
         }
+    }
+    // Windows: each process with a live audio session becomes a routeable
+    // application source (captured via WASAPI process loopback on connect).
+    #[cfg(target_os = "windows")]
+    for endpoint in super::windows_loopback::enumerate_application_sessions() {
+        endpoints.insert(endpoint.id, endpoint);
+    }
+    // macOS: each process producing audio right now becomes a routeable
+    // application source (captured via a Core Audio process tap on connect).
+    #[cfg(target_os = "macos")]
+    for endpoint in super::macos_tap::enumerate_application_processes() {
+        endpoints.insert(endpoint.id, endpoint);
     }
     endpoints
 }
@@ -402,6 +437,33 @@ fn open_capture(
     endpoint: &AudioEndpoint,
     hub: &Arc<ControlHub>,
 ) -> Result<CaptureRuntime, AudioError> {
+    // Application sources capture through WASAPI process loopback instead
+    // of a device stream (Windows only; macOS gains taps separately).
+    #[cfg(target_os = "windows")]
+    if endpoint.endpoint_type == EndpointType::ApplicationOutput {
+        let (capture, publisher, meter) =
+            super::windows_loopback::LoopbackCapture::start(endpoint, hub)?;
+        let activity = capture.activity().clone();
+        return Ok(CaptureRuntime {
+            endpoint_id: endpoint.id,
+            meter,
+            publisher,
+            activity,
+            _driver: CaptureDriver::Loopback(capture),
+        });
+    }
+    #[cfg(target_os = "macos")]
+    if endpoint.endpoint_type == EndpointType::ApplicationOutput {
+        let (capture, publisher, meter) = super::macos_tap::TapCapture::start(endpoint, hub)?;
+        let activity = capture.activity().clone();
+        return Ok(CaptureRuntime {
+            endpoint_id: endpoint.id,
+            meter,
+            publisher,
+            activity,
+            _driver: CaptureDriver::Tap(capture),
+        });
+    }
     let device = find_device(host, endpoint.id, true)?;
     let (config, channels, rate) = stream_config(&device, true, hub)?;
     let meter = Arc::new(RouteMeter::new(channels));
@@ -462,7 +524,7 @@ fn open_capture(
                     meter,
                     publisher: SourcePublisher::new(handle),
                     activity,
-                    _stream: stream,
+                    _driver: CaptureDriver::Device(stream),
                 });
             }
             Err(error) => last_error = Some(error),
@@ -629,28 +691,34 @@ fn connect_route(
         .get(&destination.id)
         .map(|runtime| runtime.channels)
         .unwrap_or(2);
-    let link = RouteLink::new(route.id, bus_channels, hub.buffer_frames(), TARGET_QUANTA)
-        .and_then(|link| {
-            let source_generation = runtimes
-                .captures
-                .get(&source.id)
-                .map(|runtime| runtime.publisher.next_generation())
-                .unwrap_or(1);
-            let bus_generation = runtimes
-                .buses
-                .get(&destination.id)
-                .map(|runtime| runtime.publisher.next_generation())
-                .unwrap_or(1);
-            let balance = hub.endpoint(source.id).balance_gains();
-            link.into_halves(source_generation, bus_generation, balance)
-        })
-        .map_err(|error| {
-            route_error(
-                ErrorCode::InvalidRoute,
-                "Orion could not start realtime processing for that connection.",
-                format!("failed to create route link for {}: {error}", route.id),
-            )
-        })?;
+    let link = RouteLink::new(
+        route.id,
+        bus_channels,
+        hub.buffer_frames(),
+        TARGET_QUANTA,
+        hub.stream_rate(),
+    )
+    .and_then(|link| {
+        let source_generation = runtimes
+            .captures
+            .get(&source.id)
+            .map(|runtime| runtime.publisher.next_generation())
+            .unwrap_or(1);
+        let bus_generation = runtimes
+            .buses
+            .get(&destination.id)
+            .map(|runtime| runtime.publisher.next_generation())
+            .unwrap_or(1);
+        let balance = hub.endpoint(source.id).balance_gains();
+        link.into_halves(source_generation, bus_generation, balance)
+    })
+    .map_err(|error| {
+        route_error(
+            ErrorCode::InvalidRoute,
+            "Orion could not start realtime processing for that connection.",
+            format!("failed to create route link for {}: {error}", route.id),
+        )
+    })?;
     let (source_half, bus_half) = link;
     runtimes
         .captures

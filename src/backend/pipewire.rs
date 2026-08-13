@@ -352,6 +352,7 @@ fn run_pipewire(
         BackendEvent::Capabilities {
             capabilities: crate::domain::BackendCapabilities {
                 virtual_devices: true,
+                application_sources: true,
             },
         },
     );
@@ -1221,22 +1222,27 @@ fn link_route<'core>(
         .get(&destination.id)
         .map(|runtime| runtime.channels())
         .unwrap_or(2);
-    let link = RouteLink::new(route.id, bus_channels, hub.buffer_frames(), TARGET_QUANTA).and_then(
-        |link| {
-            let source_generation = runtimes
-                .captures
-                .get(&source.id)
-                .map(|runtime| runtime.next_generation())
-                .unwrap_or(1);
-            let bus_generation = runtimes
-                .buses
-                .get(&destination.id)
-                .map(|runtime| runtime.next_generation())
-                .unwrap_or(1);
-            let balance = hub.endpoint(source.id).balance_gains();
-            link.into_halves(source_generation, bus_generation, balance)
-        },
-    );
+    let link = RouteLink::new(
+        route.id,
+        bus_channels,
+        hub.buffer_frames(),
+        TARGET_QUANTA,
+        hub.stream_rate(),
+    )
+    .and_then(|link| {
+        let source_generation = runtimes
+            .captures
+            .get(&source.id)
+            .map(|runtime| runtime.next_generation())
+            .unwrap_or(1);
+        let bus_generation = runtimes
+            .buses
+            .get(&destination.id)
+            .map(|runtime| runtime.next_generation())
+            .unwrap_or(1);
+        let balance = hub.endpoint(source.id).balance_gains();
+        link.into_halves(source_generation, bus_generation, balance)
+    });
     let (source_half, bus_half) = match link {
         Ok(halves) => halves,
         Err(error) => {

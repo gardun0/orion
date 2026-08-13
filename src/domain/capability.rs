@@ -10,4 +10,8 @@ use serde::{Deserialize, Serialize};
 pub struct BackendCapabilities {
     /// The backend can create and manage virtual input/output devices.
     pub virtual_devices: bool,
+    /// The backend can expose individual applications as capturable source
+    /// endpoints (PipeWire stream nodes, WASAPI process loopback sessions,
+    /// Core Audio process taps).
+    pub application_sources: bool,
 }
